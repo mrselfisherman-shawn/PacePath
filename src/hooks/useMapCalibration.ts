@@ -14,6 +14,7 @@ const initialState: CalibrationState = {
 }
 
 export function useMapCalibration() {
+  const calibrationPath = `${import.meta.env.BASE_URL}data/meta/map-calibration.json`
   const [state, setState] = useState<CalibrationState>(initialState)
 
   useEffect(() => {
@@ -21,7 +22,7 @@ export function useMapCalibration() {
 
     async function loadCalibration() {
       try {
-        const response = await fetch('/data/meta/map-calibration.json')
+        const response = await fetch(calibrationPath)
         if (!response.ok) {
           throw new Error('Failed to fetch map-calibration.json')
         }
@@ -48,7 +49,7 @@ export function useMapCalibration() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [calibrationPath])
 
   return useMemo(() => state, [state])
 }

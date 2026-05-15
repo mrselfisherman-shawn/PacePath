@@ -65,6 +65,8 @@ function downloadCsv(filename: string, content: string) {
 }
 
 export function HotRouteAnnotationMode() {
+  const roadsCsvPath = `${import.meta.env.BASE_URL}data/guide-roads.csv`
+  const guideMapSrc = `${import.meta.env.BASE_URL}data/images/guides/campus-guide.jpg`
   const [rows, setRows] = useState<RoadRow[]>([])
   const [headers, setHeaders] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
@@ -97,7 +99,7 @@ export function HotRouteAnnotationMode() {
 
     async function loadRoads() {
       try {
-        const data = await loadCsv('/data/guide-roads.csv')
+        const data = await loadCsv(roadsCsvPath)
         if (cancelled) return
 
         const normalized = data.map(normalizeRoad)
@@ -122,7 +124,7 @@ export function HotRouteAnnotationMode() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [roadsCsvPath])
 
   const roads = useMemo(() => {
     return rows
@@ -317,7 +319,7 @@ export function HotRouteAnnotationMode() {
 
         <section className="map-section">
           <div className="map-container">
-            <img className="map-image" src="/data/images/guides/campus-guide.jpg" alt="Campus guide map" />
+            <img className="map-image" src={guideMapSrc} alt="Campus guide map" />
             <svg className="map-overlay" viewBox="0 0 3085 3221" preserveAspectRatio="xMidYMid meet">
               {roads.map(({ row, points }) => {
                 const selected = selectedRoadIds.has(row.road_id)

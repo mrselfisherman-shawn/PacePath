@@ -1,11 +1,13 @@
 import { NavLink } from 'react-router-dom'
 
 export function TopNav() {
+  const logoSrc = `${import.meta.env.BASE_URL}data/images/logo/logo.png`
+
   return (
     <header className="top-nav" aria-label="Main navigation">
       <div className="top-nav-inner">
         <NavLink to="/" className="brand-link">
-          <img className="brand-logo" src="/data/images/logo/logo.png" alt="PacePath logo" />
+          <img className="brand-logo" src={logoSrc} alt="PacePath logo" />
           <span>PacePath</span>
         </NavLink>
         <nav className="top-nav-links" aria-label="Primary">

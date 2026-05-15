@@ -18,6 +18,9 @@ const initialState: CampusDataState = {
 }
 
 export function useCampusData() {
+  const placesPath = `${import.meta.env.BASE_URL}data/csv/place-annotated.csv`
+  const roadsPath = `${import.meta.env.BASE_URL}data/guide_roads.csv`
+  const mappingsPath = `${import.meta.env.BASE_URL}data/csv/place-road-mapping.csv`
   const [state, setState] = useState<CampusDataState>(initialState)
 
   useEffect(() => {
@@ -26,9 +29,9 @@ export function useCampusData() {
     async function loadCampusData() {
       try {
         const [places, roads, mappings] = await Promise.all([
-          loadCsv('/data/csv/place-annotated.csv'),
-          loadCsv('/data/guide_roads.csv'),
-          loadCsv('/data/csv/place-road-mapping.csv'),
+          loadCsv(placesPath),
+          loadCsv(roadsPath),
+          loadCsv(mappingsPath),
         ])
 
         if (!cancelled) {
@@ -58,7 +61,7 @@ export function useCampusData() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [mappingsPath, placesPath, roadsPath])
 
   return useMemo(() => state, [state])
 }

@@ -14,6 +14,7 @@ const initialState: SvgRoadNetworkState = {
 }
 
 export function useSvgRoadNetwork() {
+  const svgPath = `${import.meta.env.BASE_URL}data/images/maps/campus-running-network.svg`
   const [state, setState] = useState<SvgRoadNetworkState>(initialState)
 
   useEffect(() => {
@@ -21,7 +22,7 @@ export function useSvgRoadNetwork() {
 
     async function loadSvgRoadNetwork() {
       try {
-        const response = await fetch('/data/images/maps/campus-running-network.svg')
+        const response = await fetch(svgPath)
         if (!response.ok) {
           throw new Error('Failed to fetch campus-running-network.svg')
         }
@@ -48,7 +49,7 @@ export function useSvgRoadNetwork() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [svgPath])
 
   return useMemo(() => state, [state])
 }

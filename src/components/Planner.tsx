@@ -106,6 +106,7 @@ function findNearestNodeId(
 
 export function Planner({ variant = 'running' }: { variant?: 'running' | 'shortest' }) {
   const isShortestMode = variant === 'shortest'
+  const guideMapSrc = `${import.meta.env.BASE_URL}data/images/guides/campus-guide.jpg`
   const { places, roads, graph, loading, error } = useGuideRoadGraph(8)
   const {
     calibration,
@@ -882,7 +883,7 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
         <div className="map-container">
           <img
             className="map-image"
-            src="/data/images/guides/campus-guide.jpg"
+            src={guideMapSrc}
             alt="Campus guide map"
           />
           <svg className="map-overlay" viewBox="0 0 3085 3221" preserveAspectRatio="xMidYMid meet">
