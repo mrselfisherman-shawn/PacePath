@@ -1,0 +1,31 @@
+{
+  "mapImage": "campus-guide.jpg",
+  "coordinateSystem": "image-pixel",
+  "calibrationMethod": "multiple_known_straight_segments",
+  "segments": [
+    {
+      "id": "CAL_001",
+      "sourcePathId": "path89",
+      "pointA": { "x": 1354.1095, "y": 2583.0611 },
+      "pointB": { "x": 1718.2695, "y": 2579.5255 },
+      "knownDistanceMeters": 139,
+      "notes": "From manually verified path89"
+    },
+    {
+      "id": "CAL_002",
+      "sourcePathId": "path96",
+      "pointA": { "x": 1716.8553, "y": 2776.8083 },
+      "pointB": { "x": 1718.2695, "y": 2579.5255 },
+      "knownDistanceMeters": 69,
+      "notes": "From manually verified path96"
+    },
+    {
+      "id": "CAL_003",
+      "sourcePathId": "path238",
+      "pointA": { "x": 200.56997, "y": 1977.8178 },
+      "pointB": { "x": 210.46356, "y": 1457.0554 },
+      "knownDistanceMeters": 181,
+      "notes": "From manually verified path238"
+    }
+  ]
+}

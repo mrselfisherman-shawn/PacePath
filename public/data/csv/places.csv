@@ -1,0 +1,49 @@
+﻿编号,中文名称,英文名称,建筑分区
+1,行政楼A1,Administration Building,A
+2,师生服务中心A2,Campus Services Building,A
+3,学术交流中心A3,University Conference Center,A
+4,教师周转公寓C1–C6,Faculty Residences,C
+5,银行C1,Bank,C
+6,博士后及研究生宿舍C7–C15,Postdoc/Graduate Student Residences,C
+7,面包店C12,Bakery,C
+8,打印店C12,Print Shop,C
+9,理发店C12,Hair Salon,C
+10,快递站C12,Post Office,C
+11,师生活动中心C16,Recreation Club,C
+12,餐厅C17/C18,Dining Hall,C
+13,餐厅C19,Dining Hall,C
+14,超市C19,Supermarket,C
+15,讲席教授公寓D1–D20,Chair Professor Residences,D
+16,学术会堂E0,Auditorium,E
+17,工学楼E1–E3,Engineering Building,E
+18,理学楼E4–E5,Science Building,E
+19,基础医学楼E6–E7,Basic Medical Sciences Building,E
+20,生命科学楼E8–E9,Life Sciences Building,E
+21,学术环E10,Academic Ring,E
+22,实验动物中心E11,Laboratory Animal Resources Center,E
+23,图书中心E12,Library,E
+24,教学中心E13,Lecture Center,E
+25,科研中心E14,Research Center,E
+26,教师周转公寓F1–F8,Faculty Residences,F
+27,教师之家F16,Faculty Recreation Center,F
+28,餐厅F17,Dining Hall,F
+29,博士后及研究生宿舍F9–F15,Postdoc/Graduate Student Residences,F
+30,通识教育中心G1,Center for General Education,G
+31,后勤综合楼G2,Facility Management Building,G
+32,实验动物中心G3,Laboratory Animal Resources Center,G
+33,试剂用品库房G4,Chemical Storage Building,G
+34,本科生书院H1–H4,Westlake Residential Colleges,H
+35,学生活动中心H5,Student Center,H
+36,餐厅H5,Dining Hall,H
+37,实验实训楼H6,Laboratory Training Building,H
+38,体育中心J1,Recreation Complex,J
+39,体育附属用房J2,Athletic Field House,J
+40,网球场,Tennis Court,J
+41,篮球场,Basketball Court,J
+42,足球场,Football Court,J
+43,排球场,Volleyball Court,J
+44,北校门,North Gate,Gate
+45,南校门,South Gate,Gate
+46,2号门,Gate 2,Gate
+47,3号门,Gate 3,Gate
+48,7号门,Gate 7,Gate
