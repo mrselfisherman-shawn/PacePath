@@ -1,7 +1,7 @@
 export function HelpPage() {
   return (
     <main className="page help-page">
-      <h1 className="page-title planner-title">Help & Guide</h1>
+      <h1 className="page-title planner-title">Help&Contact</h1>
       <p className="planner-subtitle">Quick steps for planning better campus runs</p>
 
       <section className="help-card" aria-label="Planner instructions">
@@ -25,6 +25,14 @@ export function HelpPage() {
         <p>- Hover a map point to view place name and position info.</p>
         <p>- Use Start/Waypoint/End buttons to switch map selection mode quickly.</p>
         <p>- If no route appears, confirm both points are connected in the current road network.</p>
+      </section>
+
+      <section className="help-contact" aria-label="Contact information">
+        <p className="help-contact-note">
+          If you find any bugs, improvement suggestions, or other ideas, please contact:
+        </p>
+        <p className="help-contact-name">ZHANG Xiaowen（张潇文）</p>
+        <p className="help-contact-email">zhangxiaowen@westlake.edu.cn</p>
       </section>
     </main>
   )
