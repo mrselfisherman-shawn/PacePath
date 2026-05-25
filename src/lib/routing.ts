@@ -51,6 +51,13 @@ type EdgeTraversalCostOptions = {
   usedCount: number
 }
 
+function mergedPopularityValue(edge: { popularity?: number; preferred?: boolean; scenicScore?: number }): number {
+  const popularity = Math.max(0, Math.min(1, edge.popularity ?? 0))
+  const preferredAsPopular = edge.preferred ? 1 : 0
+  const scenicAsPopular = Math.max(0, Math.min(1, edge.scenicScore ?? 0))
+  return Math.max(popularity, preferredAsPopular, scenicAsPopular)
+}
+
 type SegmentRoute = {
   routeNodeIds: string[]
   routeEdgeIds: string[]
@@ -129,15 +136,23 @@ function qualityFromDiff(diffPercentAbs: number): RouteCandidate['qualityLabel']
   return 'invalid'
 }
 
+function countImmediateBacktracks(routeNodeIds: string[]): number {
+  if (routeNodeIds.length < 3) return 0
+  let count = 0
+  for (let i = 2; i < routeNodeIds.length; i += 1) {
+    if (routeNodeIds[i] === routeNodeIds[i - 2]) count += 1
+  }
+  return count
+}
+
 export function dijkstra(graph: RoadGraph, startNodeId: string, endNodeId: string): DijkstraResult {
   return dijkstraWithPenalties(graph, startNodeId, endNodeId, new Map(), 1)
 }
 
 export function getEdgeTraversalCost(edge: EdgeMeta, options: EdgeTraversalCostOptions): number {
   let factor = 1
-  if (edge.preferred) factor *= 0.9
-  if (edge.popularity > 0) factor *= 1 - Math.min(1, edge.popularity) * 0.15
-  if (edge.scenicScore > 0) factor *= 1 - Math.min(1, edge.scenicScore) * 0.1
+  const mergedPopularity = mergedPopularityValue(edge)
+  if (mergedPopularity > 0) factor *= 1 - mergedPopularity * 0.18
   factor = Math.max(0.7, factor)
 
   const preferredCost = edge.length * factor
@@ -415,46 +430,36 @@ function toCandidate(
   const differencePercent = (differenceM / targetDistanceM) * 100
   const diffAbs = Math.abs(differencePercent)
   const repeatedEdgeRatio = uniqueRatio(route.routeEdgeIds)
+  const immediateBacktrackCount = countImmediateBacktracks(route.routeNodeIds)
   const qualityLabel = qualityFromDiff(diffAbs)
 
   const edgeMap = new Map(graph.edges.map((e) => [e.edge_id, e]))
   const edgeLenMap = edgeLengthMap(graph)
-  const pedCount = route.routeEdgeIds.reduce((sum, edgeId) => {
-    const edge = edgeMap.get(edgeId)
-    return sum + ((edge?.type ?? '').toLowerCase() === 'pedestrian_path' ? 1 : 0)
-  }, 0)
-  const pedestrianRatio = route.routeEdgeIds.length > 0 ? pedCount / route.routeEdgeIds.length : 0
-
   let popularLen = 0
-  let preferredLen = 0
-  let scenicWeighted = 0
   let totalLen = 0
   for (const edgeId of route.routeEdgeIds) {
     const edge = edgeMap.get(edgeId)
     const len = edgeLenMap.get(edgeId) ?? 0
     if (!edge || len <= 0) continue
     totalLen += len
-    if ((edge.popularity ?? 0) > 0) popularLen += len
-    if (edge.preferred) preferredLen += len
-    scenicWeighted += len * (edge.scenicScore ?? 0)
+    if (mergedPopularityValue(edge) > 0) popularLen += len
   }
 
   const popularEdgeRatio = totalLen > 0 ? popularLen / totalLen : 0
-  const preferredEdgeRatio = totalLen > 0 ? preferredLen / totalLen : 0
-  const scenicAverage = totalLen > 0 ? scenicWeighted / totalLen : 0
-  const popularityBonus = preferredEdgeRatio * 15 + popularEdgeRatio * 10 + scenicAverage * 8
+  const preferredEdgeRatio = 0
+  const scenicAverage = 0
+  const popularityBonus = popularEdgeRatio * 18
 
   const distanceErrorRatio = Math.abs(actualDistanceM - targetDistanceM) / targetDistanceM
   const score =
     distanceErrorRatio * 100 +
-    repeatedEdgeRatio * 20 +
-    pedestrianRatio * 10 -
-    preferredEdgeRatio * 15 -
-    popularEdgeRatio * 10 -
-    scenicAverage * 8
+    repeatedEdgeRatio * 15 -
+    popularEdgeRatio * 80 +
+    immediateBacktrackCount * 30
 
   const warnings = [...extraWarnings]
   if (usedLoop) warnings.push('包含重复路段，用于匹配目标距离。')
+  if (immediateBacktrackCount > 0) warnings.push('包含连续折返路段。')
 
   return {
     id,
@@ -659,14 +664,19 @@ export function generateAlternativeRoutes({
 
   candidates.sort((a, b) => a.score - b.score)
 
+  const noImmediateBacktrack = candidates.filter(
+    (c) => countImmediateBacktracks(c.routeNodeIds) === 0,
+  )
+  const pool = noImmediateBacktrack.length > 0 ? noImmediateBacktrack : candidates
+
   // default do not prioritize invalid
-  const notShort = candidates.filter((c) => c.actualDistanceM >= c.targetDistanceM)
+  const notShort = pool.filter((c) => c.actualDistanceM >= c.targetDistanceM)
   const validFirst = notShort.filter((c) => c.qualityLabel !== 'invalid')
-  const invalidRest = candidates.filter((c) => c.qualityLabel === 'invalid' && c.actualDistanceM >= c.targetDistanceM)
+  const invalidRest = pool.filter((c) => c.qualityLabel === 'invalid' && c.actualDistanceM >= c.targetDistanceM)
 
   // fallback: if no >=target candidate, allow best under-target with warning
   if (validFirst.length === 0 && invalidRest.length === 0) {
-    const fallback = [...candidates]
+    const fallback = [...pool]
       .sort((a, b) => a.score - b.score)
       .slice(0, maxCandidates)
       .map((c) => ({ ...c, warnings: [...c.warnings, 'under_target_fallback'] }))
