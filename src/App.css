@@ -26,8 +26,8 @@
   left: 0;
   right: 0;
   z-index: 30;
-  background: rgba(247, 248, 230, 0.95);
-  border-bottom: 1px solid #d5dcaa;
+  background: rgba(234, 241, 206, 0.97);
+  border-bottom: 1px solid #c6d48f;
   backdrop-filter: blur(6px);
 }
 
@@ -121,6 +121,15 @@
   margin: 0;
 }
 
+.data-status-compact {
+  margin-top: -4px;
+}
+
+.data-status-compact p {
+  font-size: 12px;
+  color: #5c6e3a;
+}
+
 .annotation-layout {
   width: min(1280px, 100%);
   display: grid;
@@ -192,18 +201,20 @@
   align-items: center;
   gap: 10px;
   flex-wrap: wrap;
+  justify-content: center;
 }
 
 .control-row-top {
-  justify-content: flex-start;
+  justify-content: center;
 }
 
 .control-row-points {
-  justify-content: space-between;
+  justify-content: center;
+  gap: 14px;
 }
 
 .control-row-bottom {
-  justify-content: space-between;
+  justify-content: center;
 }
 
 .distance-field {
@@ -223,12 +234,109 @@
   background: #fbfdea;
 }
 
-.point-picker {
+.distance-field select {
+  width: 150px;
+  padding: 8px 10px;
+  border: 1px solid #c8d59a;
+  border-radius: 999px;
+  background: #fbfdea;
+  color: #2d3d1e;
+}
+
+.pace-display {
   display: inline-flex;
   align-items: center;
-  min-width: 320px;
-  gap: 8px;
-  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid #c8d59a;
+  border-radius: 999px;
+  background: #fbfdea;
+  color: #2d3d1e;
+  font-weight: 700;
+}
+
+.point-picker {
+  display: inline-flex;
+  align-items: stretch;
+  min-width: 260px;
+  gap: 4px;
+  flex: 1 1 280px;
+}
+
+.point-split-button {
+  position: relative;
+  display: inline-flex;
+  align-items: stretch;
+  width: auto;
+}
+
+.point-split-button .mode-button {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+  border-top-left-radius: 10px;
+  border-bottom-left-radius: 10px;
+  padding: 8px 12px;
+  min-width: 180px;
+}
+
+.point-dropdown-trigger {
+  border: 1px solid #b7cb6b;
+  border-left: 0;
+  background: #eef5cf;
+  color: #2b3f16;
+  border-top-right-radius: 10px;
+  border-bottom-right-radius: 10px;
+  width: 34px;
+  padding: 8px 0;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.point-dropdown-list {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 260px;
+  max-width: 380px;
+  z-index: 12;
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  border: 1px solid #c8d59a;
+  border-radius: 10px;
+  background: #fbfdea;
+  box-shadow: 0 8px 18px rgba(62, 94, 24, 0.14);
+  max-height: 260px;
+  overflow: auto;
+}
+
+.point-option {
+  width: 100%;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  padding: 7px 8px;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: #2c4018;
+  cursor: pointer;
+}
+
+.point-option:hover {
+  background: #eaf4c8;
+}
+
+.point-option.is-selected {
+  background: #dbeab0;
+  font-weight: 700;
+}
+
+.point-option-check {
+  margin-left: 10px;
+  color: #28511b;
+  font-weight: 800;
 }
 
 .mode-button {
@@ -246,33 +354,6 @@
   border-color: #90ad39;
   background: #d8e88e;
   color: #1f2e11;
-}
-
-.point-select-wrap {
-  position: relative;
-  min-width: 180px;
-  flex: 1;
-}
-
-.point-select-wrap::after {
-  content: '▾';
-  position: absolute;
-  right: 12px;
-  top: 50%;
-  transform: translateY(-50%);
-  color: #3b5b1d;
-  pointer-events: none;
-}
-
-.point-select-wrap select {
-  width: 100%;
-  min-width: 180px;
-  border: 1px solid #c8d59a;
-  border-radius: 999px;
-  background: #fbfdea;
-  color: #2d3d1e;
-  padding: 9px 34px 9px 12px;
-  appearance: none;
 }
 
 .generate-button {
@@ -401,29 +482,33 @@
   text-overflow: ellipsis;
 }
 
-.picked-marker-icon {
-  fill: #0f766e;
+.picked-marker-pin {
   stroke: #ffffff;
   stroke-width: 2;
 }
 
 .picked-marker-text {
   fill: #ffffff;
-  font-size: 14px;
+  font-size: 16px;
   font-weight: 700;
   text-anchor: middle;
+  dominant-baseline: middle;
 }
 
 .hover-place-name {
   fill: #0f172a;
-  font-size: 14px;
+  font-size: 17px;
   font-weight: 700;
+  dominant-baseline: middle;
+  text-shadow: none;
 }
 
 .hover-place-meta {
-  fill: #1e3a8a;
-  font-size: 12px;
+  fill: #355122;
+  font-size: 14px;
   font-weight: 600;
+  dominant-baseline: middle;
+  text-shadow: none;
 }
 
 .candidate-list {
@@ -441,6 +526,19 @@
   text-align: left;
 }
 
+.route-playback-controls {
+  width: min(1100px, 100%);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: flex-start;
+  margin-top: -4px;
+}
+
+.play-icon {
+  font-size: 13px;
+}
+
 .route-options-title {
   margin: 0 0 10px;
   color: #36591f;
@@ -452,6 +550,15 @@
   margin: 0 0 10px;
   font-size: 14px;
   color: #334b1b;
+}
+
+.route-direction-arrow {
+  fill: #ffffff;
+  font-size: 16px;
+  font-weight: 800;
+  text-anchor: middle;
+  dominant-baseline: middle;
+  pointer-events: none;
 }
 
 .candidate-item {
@@ -553,6 +660,33 @@
   color: #2b3f16;
   font-size: 16px;
   font-weight: 700;
+}
+
+.help-contact {
+  width: min(900px, 100%);
+  margin-top: 6px;
+  padding: 12px 0 4px;
+  border-top: 1px dashed #c2cf8f;
+  text-align: center;
+}
+
+.help-contact-name {
+  margin: 0 0 4px;
+  color: #2b3f16;
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.help-contact-note {
+  margin: 8px 0 10px;
+  color: #355122;
+  font-size: 14px;
+}
+
+.help-contact-email {
+  margin: 0;
+  color: #355122;
+  font-size: 14px;
 }
 
 .hot-mode-page {
