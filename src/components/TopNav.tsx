@@ -34,7 +34,7 @@ export function TopNav() {
             to="/help"
             className={({ isActive }) => (isActive ? 'top-nav-link is-active' : 'top-nav-link')}
           >
-            Help
+            Help&Contact
           </NavLink>
         </nav>
       </div>
