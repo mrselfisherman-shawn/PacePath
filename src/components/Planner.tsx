@@ -1,53 +1,58 @@
-import { type KeyboardEvent, useMemo, useState } from 'react'
+import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react'
 import { useGuideRoadGraph } from '../hooks/useGuideRoadGraph'
 import { dijkstra, generateAlternativeRoutes, type RouteCandidate } from '../lib/routing'
 import { formatDistance, pxToMeters } from '../lib/distance'
 import { useMapCalibration } from '../hooks/useMapCalibration'
 
 type MapPoint = { node_id: string; x: number; y: number }
+type MapSegment = { x1: number; y1: number; x2: number; y2: number; startPx: number; endPx: number }
 
-function slicePolyline(points: MapPoint[], fromPx: number, toPx: number): MapPoint[] {
-  if (points.length < 2 || toPx <= fromPx) return []
-  const out: MapPoint[] = []
-  let travelled = 0
+function buildDirectionalOffsetSegments(points: MapPoint[], offsetPx = 10): MapSegment[] {
+  if (points.length < 2) return []
 
+  const segmentKeys: string[] = []
+  const directionSets = new Map<string, Set<string>>()
   for (let i = 0; i < points.length - 1; i++) {
     const a = points[i]
     const b = points[i + 1]
-    const seg = Math.hypot(b.x - a.x, b.y - a.y)
-    if (seg <= 0) continue
-
-    const segStart = travelled
-    const segEnd = travelled + seg
-    if (segEnd < fromPx || segStart > toPx) {
-      travelled = segEnd
-      continue
-    }
-
-    const localFrom = Math.max(0, (fromPx - segStart) / seg)
-    const localTo = Math.min(1, (toPx - segStart) / seg)
-
-    const p1: MapPoint = {
-      node_id: `slice-${i}-a`,
-      x: a.x + (b.x - a.x) * localFrom,
-      y: a.y + (b.y - a.y) * localFrom,
-    }
-    const p2: MapPoint = {
-      node_id: `slice-${i}-b`,
-      x: a.x + (b.x - a.x) * localTo,
-      y: a.y + (b.y - a.y) * localTo,
-    }
-
-    if (out.length === 0) out.push(p1)
-    else {
-      const last = out[out.length - 1]
-      if (last.x !== p1.x || last.y !== p1.y) out.push(p1)
-    }
-    out.push(p2)
-    travelled = segEnd
+    const key = a.node_id < b.node_id ? `${a.node_id}__${b.node_id}` : `${b.node_id}__${a.node_id}`
+    const dirKey = `${a.node_id}->${b.node_id}`
+    segmentKeys.push(key)
+    if (!directionSets.has(key)) directionSets.set(key, new Set())
+    directionSets.get(key)!.add(dirKey)
   }
 
-  return out
+  const shifted: MapSegment[] = []
+  let travelled = 0
+  for (let i = 0; i < points.length - 1; i++) {
+    const a = points[i]
+    const b = points[i + 1]
+    const key = segmentKeys[i]
+    const hasOppositeDirection = (directionSets.get(key)?.size ?? 0) > 1
+    const normalizedForward = key.split('__').join('->')
+    const currentForward = `${a.node_id}->${b.node_id}`
+    const lane = hasOppositeDirection ? (currentForward === normalizedForward ? 1 : -1) : 0
+    const offset = lane * offsetPx
+    const dx = b.x - a.x
+    const dy = b.y - a.y
+    const len = Math.hypot(dx, dy)
+    const nx = len > 0 ? -dy / len : 0
+    const ny = len > 0 ? dx / len : 0
+    const startPx = travelled
+    const endPx = travelled + len
+
+    shifted.push({
+      x1: a.x + nx * offset,
+      y1: a.y + ny * offset,
+      x2: b.x + nx * offset,
+      y2: b.y + ny * offset,
+      startPx,
+      endPx,
+    })
+    travelled = endPx
+  }
+
+  return shifted
 }
 
 type SelectionMode = 'selecting_start' | 'selecting_end' | 'selecting_waypoint'
@@ -55,6 +60,9 @@ type SelectionMode = 'selecting_start' | 'selecting_end' | 'selecting_waypoint'
 type PlaceOption = {
   key: string
   name: string
+  zhName: string
+  enName: string
+  position: string
   anchorNodeId: string
   routeEnabled: boolean
   area: string
@@ -75,6 +83,9 @@ type RouteSummary = {
   totalLengthPx: number
   note: string | null
 }
+
+const PACE_PRESETS = ['4:00', '5:00', '6:00', '6:30', '7:00'] as const
+const WALKING_PACE_MIN_PER_KM = 12
 
 function normalizeFlag(value: string | undefined): boolean {
   const text = (value ?? '').trim().toLowerCase()
@@ -104,6 +115,36 @@ function findNearestNodeId(
   return bestId
 }
 
+function parsePaceToSeconds(value: string): number | null {
+  const [m, s] = value.split(':').map((v) => Number(v))
+  if (!Number.isFinite(m) || !Number.isFinite(s) || m < 0 || s < 0 || s >= 60) return null
+  return m * 60 + s
+}
+
+function formatPaceSeconds(seconds: number): string {
+  const total = Math.max(0, Math.round(seconds))
+  const m = Math.floor(total / 60)
+  const s = total % 60
+  return `${m}:${String(s).padStart(2, '0')}`
+}
+
+function clampPaceSeconds(seconds: number): number {
+  return Math.max(240, Math.min(900, seconds))
+}
+
+function snapToPaceStep(seconds: number): number {
+  return Math.round(seconds / 15) * 15
+}
+
+function formatMinutesToClock(totalMin: number): string {
+  const min = Math.max(0, totalMin)
+  const h = Math.floor(min / 60)
+  const m = Math.floor(min % 60)
+  const s = Math.round((min - Math.floor(min)) * 60)
+  if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+  return `${m}:${String(s).padStart(2, '0')}`
+}
+
 export function Planner({ variant = 'running' }: { variant?: 'running' | 'shortest' }) {
   const isShortestMode = variant === 'shortest'
   const guideMapSrc = `${import.meta.env.BASE_URL}data/images/guides/campus-guide.jpg`
@@ -127,6 +168,37 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
   const [routeCandidates, setRouteCandidates] = useState<RouteCandidate[]>([])
   const [selectedCandidateId, setSelectedCandidateId] = useState('')
   const [hoveredPlaceKey, setHoveredPlaceKey] = useState('')
+  const [paceSeconds, setPaceSeconds] = useState<number>(390)
+  const [paceText, setPaceText] = useState<string>('6:30')
+  const [isRoutePlaying, setIsRoutePlaying] = useState(false)
+  const [routePlayProgress, setRoutePlayProgress] = useState(0)
+  const playStartRef = useRef<number | null>(null)
+  const [openPicker, setOpenPicker] = useState<'start' | 'waypoint' | 'end' | null>(null)
+  const pointPickerWrapRef = useRef<HTMLDivElement | null>(null)
+
+  useEffect(() => {
+    setPaceText(formatPaceSeconds(paceSeconds))
+  }, [paceSeconds])
+
+  useEffect(() => {
+    function handleDocClick(event: MouseEvent) {
+      const target = event.target as Node
+      if (!pointPickerWrapRef.current?.contains(target)) {
+        setOpenPicker(null)
+      }
+    }
+
+    function handleEsc(event: globalThis.KeyboardEvent) {
+      if (event.key === 'Escape') setOpenPicker(null)
+    }
+
+    document.addEventListener('mousedown', handleDocClick)
+    document.addEventListener('keydown', handleEsc)
+    return () => {
+      document.removeEventListener('mousedown', handleDocClick)
+      document.removeEventListener('keydown', handleEsc)
+    }
+  }, [])
 
   function handleSvgActionKeyDown(event: KeyboardEvent<SVGElement>, action: () => void) {
     if (event.key === 'Enter' || event.key === ' ') {
@@ -171,7 +243,10 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
         row.place_id?.trim() ||
         row['编号']?.trim() ||
         `Place ${index + 1}`
+      const zhName = row['中文名称']?.trim() || ''
+      const enName = row['英文名称']?.trim() || ''
       const area = row.area?.trim() || row['建筑分区']?.trim() || '-'
+      const position = row['建筑分区']?.trim() || row.area?.trim() || '-'
       const category = row.category?.trim() || row['类别']?.trim() || '-'
       const routeEnabled = normalizeFlag(row.route_enabled)
 
@@ -186,6 +261,9 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
       return {
         key: `${name}__${index}`,
         name,
+        zhName,
+        enName,
+        position,
         anchorNodeId,
         routeEnabled,
         area,
@@ -222,6 +300,15 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
       .filter((n): n is MapPoint => !!n)
   }, [routeNodeIds, nodeMap, routeCandidates, selectedCandidateId])
 
+  const routeDisplaySegments = useMemo(() => buildDirectionalOffsetSegments(routePoints, 0), [routePoints])
+
+  const visibleRouteSegments = useMemo(() => {
+    if (routeDisplaySegments.length === 0) return routeDisplaySegments
+    if (!isRoutePlaying && routePlayProgress <= 0) return routeDisplaySegments
+    const count = Math.max(1, Math.ceil(routeDisplaySegments.length * routePlayProgress))
+    return routeDisplaySegments.slice(0, count)
+  }, [isRoutePlaying, routeDisplaySegments, routePlayProgress])
+
   const targetDistanceKm = useMemo(() => {
     const value = Number(targetDistanceKmInput)
     if (!Number.isFinite(value) || value <= 0) return null
@@ -233,27 +320,114 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
     [targetDistanceKm],
   )
 
-  const warmupCooldownSegments = useMemo(() => {
-    if (isShortestMode || !calibration || targetDistanceM === null || routePoints.length < 2) {
-      return { start: [] as MapPoint[], end: [] as MapPoint[] }
+  const warmupBandPx = useMemo(() => {
+    if (isShortestMode || !calibration || targetDistanceM === null || routeDisplaySegments.length < 1) {
+      return 0
     }
-
-    let totalPx = 0
-    for (let i = 0; i < routePoints.length - 1; i++) {
-      totalPx += Math.hypot(
-        routePoints[i + 1].x - routePoints[i].x,
-        routePoints[i + 1].y - routePoints[i].y,
-      )
-    }
+    const totalPx = routeDisplaySegments.length > 0 ? routeDisplaySegments[routeDisplaySegments.length - 1].endPx : 0
     const totalM = pxToMeters(totalPx, calibration)
     const excessM = totalM - targetDistanceM
-    if (excessM <= 0) return { start: [] as MapPoint[], end: [] as MapPoint[] }
+    if (excessM <= 0) return 0
+    return (excessM / 2) / calibration.metersPerPixel
+  }, [calibration, isShortestMode, routeDisplaySegments, targetDistanceM])
 
-    const segmentPx = (excessM / 2) / calibration.metersPerPixel
-    const start = slicePolyline(routePoints, 0, segmentPx)
-    const end = slicePolyline(routePoints, Math.max(0, totalPx - segmentPx), totalPx)
-    return { start, end }
-  }, [calibration, isShortestMode, routePoints, targetDistanceM])
+  const displaySegmentsWithColor = useMemo(() => {
+    if (routePoints.length < 2 || visibleRouteSegments.length === 0) return [] as Array<MapSegment & { color: string }>
+
+    const visibleCount = Math.min(visibleRouteSegments.length, routePoints.length - 1)
+    const firstDirectionByKey = new Map<string, string>()
+    const visitCountByKey = new Map<string, number>()
+
+    const totalPx = visibleRouteSegments[visibleRouteSegments.length - 1].endPx
+    const startBandEndPx = warmupBandPx
+    const endBandStartPx = Math.max(0, totalPx - warmupBandPx)
+
+    const out: Array<MapSegment & { color: string }> = []
+    for (let i = 0; i < visibleCount; i++) {
+      const seg = visibleRouteSegments[i]
+      const fromId = routePoints[i].node_id
+      const toId = routePoints[i + 1].node_id
+      const key = fromId < toId ? `${fromId}__${toId}` : `${toId}__${fromId}`
+      const dir = `${fromId}->${toId}`
+      const firstDir = firstDirectionByKey.get(key)
+      const visited = visitCountByKey.get(key) ?? 0
+
+      let x1 = seg.x1
+      let y1 = seg.y1
+      let x2 = seg.x2
+      let y2 = seg.y2
+      const isSecondOrLaterReversePass = visited >= 1 && !!firstDir && dir !== firstDir
+      if (isSecondOrLaterReversePass) {
+        const dx = seg.x2 - seg.x1
+        const dy = seg.y2 - seg.y1
+        const len = Math.hypot(dx, dy)
+        const nx = len > 0 ? -dy / len : 0
+        const ny = len > 0 ? dx / len : 0
+        const offset = 10
+        x1 += nx * offset
+        y1 += ny * offset
+        x2 += nx * offset
+        y2 += ny * offset
+      }
+
+      if (!firstDir) firstDirectionByKey.set(key, dir)
+      visitCountByKey.set(key, visited + 1)
+
+      const midPx = (seg.startPx + seg.endPx) * 0.5
+      const isWarmup = !isShortestMode && warmupBandPx > 0 && (midPx <= startBandEndPx || midPx >= endBandStartPx)
+      const color = isWarmup ? '#16a34a' : isShortestMode ? '#2563eb' : '#f97316'
+
+      out.push({ x1, y1, x2, y2, startPx: seg.startPx, endPx: seg.endPx, color })
+    }
+
+    return out
+  }, [isShortestMode, routePoints, visibleRouteSegments, warmupBandPx])
+
+  const routeDirectionMarkers = useMemo(() => {
+    if (isShortestMode || displaySegmentsWithColor.length === 0) return [] as Array<{ x: number; y: number; angle: number }>
+    const markers: Array<{ x: number; y: number; angle: number }> = []
+    for (let i = 0; i < displaySegmentsWithColor.length; i++) {
+      if (i % 2 !== 0) continue
+      const seg = displaySegmentsWithColor[i]
+      const dx = seg.x2 - seg.x1
+      const dy = seg.y2 - seg.y1
+      const len = Math.hypot(dx, dy)
+      if (len < 26) continue
+      markers.push({
+        x: seg.x1 + dx * 0.5,
+        y: seg.y1 + dy * 0.5,
+        angle: (Math.atan2(dy, dx) * 180) / Math.PI,
+      })
+    }
+    return markers
+  }, [displaySegmentsWithColor, isShortestMode])
+
+  useEffect(() => {
+    setIsRoutePlaying(false)
+    setRoutePlayProgress(0)
+    playStartRef.current = null
+  }, [selectedCandidateId, routeNodeIds.join('|')])
+
+  useEffect(() => {
+    if (!isRoutePlaying) return
+    const durationMs = 3500
+
+    const tick = (ts: number) => {
+      if (playStartRef.current === null) playStartRef.current = ts
+      const elapsed = ts - playStartRef.current
+      const next = Math.min(1, elapsed / durationMs)
+      setRoutePlayProgress(next)
+      if (next < 1) {
+        requestAnimationFrame(tick)
+      } else {
+        setIsRoutePlaying(false)
+        playStartRef.current = null
+      }
+    }
+
+    const id = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(id)
+  }, [isRoutePlaying])
 
   function buildCandidate(
     routeNodeIdsValue: string[],
@@ -701,6 +875,13 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
     }
   }
 
+  function handlePointSelectorChange(kind: 'start' | 'waypoint' | 'end', value: string) {
+    if (kind === 'start') setStartKey(value)
+    if (kind === 'waypoint') setWaypointKey(value)
+    if (kind === 'end') setEndKey(value)
+    setOpenPicker(null)
+  }
+
   const routeMeta = useMemo(() => {
     if (!routeSummary) return null
     const routeEdges = routeEdgeIds.map((id) => edgeMap.get(id)).filter(Boolean)
@@ -721,6 +902,37 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
     }
   }, [routeSummary, routeEdgeIds, edgeMap, calibration])
 
+  const timeEstimate = useMemo(() => {
+    if (isShortestMode) return null
+    const paceMinPerKm = paceSeconds / 60
+    if (!paceMinPerKm) return null
+
+    const actualDistanceM = routeCandidate?.actualDistanceM ?? routeMeta?.estimatedLengthM ?? null
+    if (actualDistanceM === null || actualDistanceM <= 0) return null
+
+    const actualKm = actualDistanceM / 1000
+    const minMinutes = actualKm * paceMinPerKm
+
+    if (targetDistanceM === null) {
+      return {
+        minText: formatMinutesToClock(minMinutes),
+        maxText: formatMinutesToClock(minMinutes),
+        note: `Walking pace assumption for overflow: ${formatMinutesToClock(WALKING_PACE_MIN_PER_KM)} / km`,
+      }
+    }
+
+    const overflowM = Math.max(0, actualDistanceM - targetDistanceM)
+    const targetKm = targetDistanceM / 1000
+    const overflowKm = overflowM / 1000
+    const maxMinutes = targetKm * paceMinPerKm + overflowKm * WALKING_PACE_MIN_PER_KM
+
+    return {
+      minText: formatMinutesToClock(minMinutes),
+      maxText: formatMinutesToClock(Math.max(minMinutes, maxMinutes)),
+      note: `Walking pace assumption for overflow: ${formatMinutesToClock(WALKING_PACE_MIN_PER_KM)} / km`,
+    }
+  }, [isShortestMode, paceSeconds, routeCandidate?.actualDistanceM, routeMeta?.estimatedLengthM, targetDistanceM])
+
   return (
     <main className="page">
       <h1 className="page-title planner-title">
@@ -731,23 +943,6 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
           ? 'Pick start and end points. Get the shortest route.'
           : 'Pick a place. Set a distance. Start running!'}
       </p>
-
-      <section className="data-status" aria-label="Data loading status" aria-live="polite">
-        {loading ? (
-          <p>Loading roads and places...</p>
-        ) : error ? (
-          <p>Failed to load data: {error}</p>
-        ) : calibrationLoading ? (
-          <p>Loading map calibration...</p>
-        ) : calibrationError ? (
-          <p>Map calibration error: {calibrationError}</p>
-        ) : (
-          <p>
-            places: {placeOptions.length} | roads: {roads.length} | nodes:{' '}
-            {graph?.nodes.length ?? 0}
-          </p>
-        )}
-      </section>
 
       <section className="control-section" aria-label="Route selection controls">
         {!isShortestMode ? (
@@ -781,82 +976,161 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
           </div>
         ) : null}
 
-        <div className="control-row control-row-points">
-          <div className="point-picker">
-            <button
-              type="button"
-              className={selectionMode === 'selecting_start' ? 'mode-button is-active' : 'mode-button'}
-              onClick={() => setSelectionMode('selecting_start')}
-            >
-              Start Point
-            </button>
-            <div className="point-select-wrap">
-              <select
-                name="start"
-                autoComplete="off"
-                aria-label="Start point list"
-                value={startKey}
-                onChange={(event) => setStartKey(event.target.value)}
+        {!isShortestMode ? (
+          <div className="control-row control-row-top">
+            <label className="distance-field">
+              <span>Pace (min/km)</span>
+              <input
+                type="text"
+                inputMode="numeric"
+                placeholder="6:30"
+                value={paceText}
+                onChange={(event) => {
+                  setPaceText(event.target.value)
+                }}
+                onBlur={() => {
+                  const parsed = parsePaceToSeconds(paceText)
+                  if (parsed === null) {
+                    setPaceText(formatPaceSeconds(paceSeconds))
+                    return
+                  }
+                  const next = clampPaceSeconds(snapToPaceStep(parsed))
+                  setPaceSeconds(next)
+                }}
+              />
+            </label>
+            {PACE_PRESETS.map((pace) => (
+              <button
+                key={`pace-${pace}`}
+                className="mode-button"
+                type="button"
+                onClick={() => {
+                  const parsed = parsePaceToSeconds(pace)
+                  if (parsed !== null) setPaceSeconds(clampPaceSeconds(snapToPaceStep(parsed)))
+                }}
               >
-                <option value="">Select from list</option>
-                {selectablePlaces.map((place) => (
-                  <option key={place.key} value={place.key}>
-                    {place.name}
-                  </option>
-                ))}
-              </select>
+                {pace}
+              </button>
+            ))}
+          </div>
+        ) : null}
+
+        <div className="control-row control-row-points" ref={pointPickerWrapRef}>
+          <div className="point-picker">
+            <div className="point-split-button">
+              <button
+                type="button"
+                className={selectionMode === 'selecting_start' ? 'mode-button is-active' : 'mode-button'}
+                onClick={() => setSelectionMode('selecting_start')}
+              >
+                Start Point
+              </button>
+              <button
+                type="button"
+                className="point-dropdown-trigger"
+                aria-label="Open start point list"
+                onClick={() => setOpenPicker((prev) => (prev === 'start' ? null : 'start'))}
+              >
+                ▾
+              </button>
+              {openPicker === 'start' ? (
+                <ul className="point-dropdown-list" role="listbox" aria-label="Start point list">
+                  {selectablePlaces.map((place) => (
+                    <li key={`start-${place.key}`}>
+                      <button
+                        type="button"
+                        className={startKey === place.key ? 'point-option is-selected' : 'point-option'}
+                        onClick={() => handlePointSelectorChange('start', place.key)}
+                      >
+                        <span>{place.name}</span>
+                        {startKey === place.key ? <span className="point-option-check">✓</span> : null}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
             </div>
           </div>
 
           <div className="point-picker">
-            <button
-              type="button"
-              className={selectionMode === 'selecting_waypoint' ? 'mode-button is-active' : 'mode-button'}
-              onClick={() => setSelectionMode('selecting_waypoint')}
-            >
-              Waypoint
-            </button>
-            <div className="point-select-wrap">
-              <select
-                name="waypoint"
-                autoComplete="off"
-                aria-label="Waypoint list"
-                value={waypointKey}
-                onChange={(event) => setWaypointKey(event.target.value)}
+            <div className="point-split-button">
+              <button
+                type="button"
+                className={selectionMode === 'selecting_waypoint' ? 'mode-button is-active' : 'mode-button'}
+                onClick={() => setSelectionMode('selecting_waypoint')}
               >
-                <option value="">None</option>
-                {selectablePlaces.map((place) => (
-                  <option key={place.key} value={place.key}>
-                    {place.name}
-                  </option>
-                ))}
-              </select>
+                Waypoint
+              </button>
+              <button
+                type="button"
+                className="point-dropdown-trigger"
+                aria-label="Open waypoint list"
+                onClick={() => setOpenPicker((prev) => (prev === 'waypoint' ? null : 'waypoint'))}
+              >
+                ▾
+              </button>
+              {openPicker === 'waypoint' ? (
+                <ul className="point-dropdown-list" role="listbox" aria-label="Waypoint list">
+                  <li>
+                    <button
+                      type="button"
+                      className={waypointKey === '' ? 'point-option is-selected' : 'point-option'}
+                      onClick={() => handlePointSelectorChange('waypoint', '')}
+                    >
+                      <span>None</span>
+                      {waypointKey === '' ? <span className="point-option-check">✓</span> : null}
+                    </button>
+                  </li>
+                  {selectablePlaces.map((place) => (
+                    <li key={`waypoint-${place.key}`}>
+                      <button
+                        type="button"
+                        className={waypointKey === place.key ? 'point-option is-selected' : 'point-option'}
+                        onClick={() => handlePointSelectorChange('waypoint', place.key)}
+                      >
+                        <span>{place.name}</span>
+                        {waypointKey === place.key ? <span className="point-option-check">✓</span> : null}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
             </div>
           </div>
 
           <div className="point-picker">
-            <button
-              type="button"
-              className={selectionMode === 'selecting_end' ? 'mode-button is-active' : 'mode-button'}
-              onClick={() => setSelectionMode('selecting_end')}
-            >
-              End Point
-            </button>
-            <div className="point-select-wrap">
-              <select
-                name="end"
-                autoComplete="off"
-                aria-label="End point list"
-                value={endKey}
-                onChange={(event) => setEndKey(event.target.value)}
+            <div className="point-split-button">
+              <button
+                type="button"
+                className={selectionMode === 'selecting_end' ? 'mode-button is-active' : 'mode-button'}
+                onClick={() => setSelectionMode('selecting_end')}
               >
-                <option value="">Select from list</option>
-                {selectablePlaces.map((place) => (
-                  <option key={place.key} value={place.key}>
-                    {place.name}
-                  </option>
-                ))}
-              </select>
+                End Point
+              </button>
+              <button
+                type="button"
+                className="point-dropdown-trigger"
+                aria-label="Open end point list"
+                onClick={() => setOpenPicker((prev) => (prev === 'end' ? null : 'end'))}
+              >
+                ▾
+              </button>
+              {openPicker === 'end' ? (
+                <ul className="point-dropdown-list" role="listbox" aria-label="End point list">
+                  {selectablePlaces.map((place) => (
+                    <li key={`end-${place.key}`}>
+                      <button
+                        type="button"
+                        className={endKey === place.key ? 'point-option is-selected' : 'point-option'}
+                        onClick={() => handlePointSelectorChange('end', place.key)}
+                      >
+                        <span>{place.name}</span>
+                        {endKey === place.key ? <span className="point-option-check">✓</span> : null}
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
             </div>
           </div>
         </div>
@@ -888,39 +1162,32 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
           />
           <svg className="map-overlay" viewBox="0 0 3085 3221" preserveAspectRatio="xMidYMid meet">
             <g>
-              {routePoints.length >= 2 ? (
-                <polyline
-                  points={routePoints.map((p) => `${p.x},${p.y}`).join(' ')}
-                  fill="none"
-                  stroke={isShortestMode ? '#2563eb' : '#f97316'}
+              {displaySegmentsWithColor.map((seg, index) => (
+                <line
+                  key={`route-seg-${index}`}
+                  x1={seg.x1}
+                  y1={seg.y1}
+                  x2={seg.x2}
+                  y2={seg.y2}
+                  stroke={seg.color}
                   strokeWidth={12}
                   strokeLinecap="round"
-                  strokeLinejoin="round"
                   opacity={0.96}
                 />
-              ) : null}
-              {warmupCooldownSegments.start.length >= 2 ? (
-                <polyline
-                  points={warmupCooldownSegments.start.map((p) => `${p.x},${p.y}`).join(' ')}
-                  fill="none"
-                  stroke="#16a34a"
-                  strokeWidth={12}
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  opacity={0.98}
-                />
-              ) : null}
-              {warmupCooldownSegments.end.length >= 2 ? (
-                <polyline
-                  points={warmupCooldownSegments.end.map((p) => `${p.x},${p.y}`).join(' ')}
-                  fill="none"
-                  stroke="#16a34a"
-                  strokeWidth={12}
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  opacity={0.98}
-                />
-              ) : null}
+              ))}
+              {!isShortestMode
+                ? routeDirectionMarkers.map((marker, index) => (
+                    <text
+                      key={`route-arrow-${index}`}
+                      className="route-direction-arrow"
+                      x={marker.x}
+                      y={marker.y}
+                      transform={`rotate(${marker.angle} ${marker.x} ${marker.y})`}
+                    >
+                      {'>>'}
+                    </text>
+                  ))
+                : null}
             </g>
 
             <g>
@@ -954,7 +1221,7 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
                     <circle
                       cx={markerX}
                       cy={markerY}
-                      r={isPicked ? 15 : isHovered ? 13 : 10}
+                      r={isPicked ? 8 : isHovered ? 13 : 10}
                       fill={fill}
                       className={isHovered && !isPicked ? 'place-marker is-hovered' : 'place-marker'}
                       role="button"
@@ -969,30 +1236,33 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
                     />
                     {isPicked ? (
                       <g>
-                        <circle cx={markerX} cy={markerY - 26} r={14} className="picked-marker-icon" />
-                        <text x={markerX} y={markerY - 20} className="picked-marker-text">
+                        <path
+                          className="picked-marker-pin"
+                          fill={fill}
+                          transform={`translate(${markerX}, ${markerY - 28})`}
+                          d="M0 -18 C9 -18 16 -11 16 -2 C16 8 8 14 0 24 C-8 14 -16 8 -16 -2 C-16 -11 -9 -18 0 -18 Z"
+                        />
+                        <text x={markerX} y={markerY - 30} className="picked-marker-text">
                           {markerLabel}
                         </text>
                       </g>
                     ) : null}
                     {isHovered ? (
-                      <g className="place-hover-card" transform={`translate(${markerX + 18}, ${markerY - 56})`}>
+                      <g className="place-hover-card" transform={`translate(${markerX + 18}, ${markerY - 64})`}>
                         <path
-                          d="M14 40h178a10 10 0 0 0 10-10V10A10 10 0 0 0 192 0H14A10 10 0 0 0 4 10v20a10 10 0 0 0 10 10z"
+                          d="M14 56h210a10 10 0 0 0 10-10V10A10 10 0 0 0 224 0H14A10 10 0 0 0 4 10v36a10 10 0 0 0 10 10z"
                           fill="#eff6ff"
-                          stroke="#60a5fa"
-                          strokeWidth="2"
+                          stroke="#3f6b2a"
+                          strokeWidth="1.2"
                         />
-                        <path
-                          d="M0 10c0-6 5-10 10-10h4a10 10 0 0 0-10 10v20a10 10 0 0 0 10 10h-4C5 40 0 35 0 30z"
-                          fill="#3b82f6"
-                        />
-                        <circle cx="14" cy="16" r="4" fill="#ffffff" />
-                        <text x="24" y="16" className="hover-place-name">
-                          {place.name}
+                        <text x="24" y="18" className="hover-place-name">
+                          {place.zhName || place.name}
                         </text>
-                        <text x="24" y="31" className="hover-place-meta">
-                          {`Position: ${place.area || '-'} | No. ${place.anchorNodeId || 'N/A'}`}
+                        <text x="24" y="34" className="hover-place-meta">
+                          {place.enName || place.name}
+                        </text>
+                        <text x="24" y="48" className="hover-place-meta">
+                          {`Position: ${place.position || '-'}`}
                         </text>
                       </g>
                     ) : null}
@@ -1016,6 +1286,40 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
         </div>
       </section>
 
+      <section className="data-status data-status-compact" aria-label="Data loading status" aria-live="polite">
+        {loading ? (
+          <p>Loading roads and places...</p>
+        ) : error ? (
+          <p>Failed to load data: {error}</p>
+        ) : calibrationLoading ? (
+          <p>Loading map calibration...</p>
+        ) : calibrationError ? (
+          <p>Map calibration error: {calibrationError}</p>
+        ) : (
+          <p>
+            places: {placeOptions.length} | roads: {roads.length} | nodes: {graph?.nodes.length ?? 0}
+          </p>
+        )}
+      </section>
+
+      <div className="route-playback-controls">
+        <button
+          type="button"
+          className="mode-button"
+          onClick={() => {
+            if (routeDisplaySegments.length < 2) return
+            playStartRef.current = null
+            setRoutePlayProgress(0)
+            setIsRoutePlaying(true)
+          }}
+        >
+          <span className="play-icon" aria-hidden="true">
+            ▶
+          </span>{' '}
+          Play Route
+        </button>
+      </div>
+
       <section className="route-info-panel" aria-label="Route details">
         <h2 className="route-options-title">{isShortestMode ? 'The Shortest Route' : 'Route Options'}</h2>
         {routeMeta ? (
@@ -1025,6 +1329,11 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
             {' -> '}
             {routeMeta.endName} | {routeMeta.estimatedLengthText ?? '-'}
             {routeCandidate ? ` | Mode: ${routeCandidate.routeMode}` : ''}
+          </p>
+        ) : null}
+        {!isShortestMode && timeEstimate ? (
+          <p className="route-option-meta">
+            Estimated training time: {timeEstimate.minText} - {timeEstimate.maxText} | {timeEstimate.note}
           </p>
         ) : null}
         {isShortestMode ? (
