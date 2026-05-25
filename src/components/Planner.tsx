@@ -173,8 +173,8 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
   const [isRoutePlaying, setIsRoutePlaying] = useState(false)
   const [routePlayProgress, setRoutePlayProgress] = useState(0)
   const playStartRef = useRef<number | null>(null)
-  const [openPicker, setOpenPicker] = useState<'start' | 'waypoint' | 'end' | null>(null)
-  const pointPickerWrapRef = useRef<HTMLDivElement | null>(null)
+  const [openSelect, setOpenSelect] = useState<'start' | 'waypoint' | 'end' | null>(null)
+  const pointSelectWrapRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     setPaceText(formatPaceSeconds(paceSeconds))
@@ -183,21 +183,12 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
   useEffect(() => {
     function handleDocClick(event: MouseEvent) {
       const target = event.target as Node
-      if (!pointPickerWrapRef.current?.contains(target)) {
-        setOpenPicker(null)
+      if (!pointSelectWrapRef.current?.contains(target)) {
+        setOpenSelect(null)
       }
     }
-
-    function handleEsc(event: globalThis.KeyboardEvent) {
-      if (event.key === 'Escape') setOpenPicker(null)
-    }
-
     document.addEventListener('mousedown', handleDocClick)
-    document.addEventListener('keydown', handleEsc)
-    return () => {
-      document.removeEventListener('mousedown', handleDocClick)
-      document.removeEventListener('keydown', handleEsc)
-    }
+    return () => document.removeEventListener('mousedown', handleDocClick)
   }, [])
 
   function handleSvgActionKeyDown(event: KeyboardEvent<SVGElement>, action: () => void) {
@@ -879,7 +870,12 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
     if (kind === 'start') setStartKey(value)
     if (kind === 'waypoint') setWaypointKey(value)
     if (kind === 'end') setEndKey(value)
-    setOpenPicker(null)
+    setOpenSelect(null)
+  }
+
+  function findPlaceNameByKey(key: string): string {
+    if (!key) return 'Select from list'
+    return selectablePlaces.find((p) => p.key === key)?.name ?? 'Select from list'
   }
 
   const routeMeta = useMemo(() => {
@@ -1015,35 +1011,33 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
           </div>
         ) : null}
 
-        <div className="control-row control-row-points" ref={pointPickerWrapRef}>
+        <div className="control-row control-row-points" ref={pointSelectWrapRef}>
           <div className="point-picker">
-            <div className="point-split-button">
+            <button
+              type="button"
+              className={selectionMode === 'selecting_start' ? 'mode-button is-active' : 'mode-button'}
+              onClick={() => setSelectionMode('selecting_start')}
+            >
+              Start Point
+            </button>
+            <div className="point-select-wrap">
               <button
                 type="button"
-                className={selectionMode === 'selecting_start' ? 'mode-button is-active' : 'mode-button'}
-                onClick={() => setSelectionMode('selecting_start')}
+                className="point-select-trigger"
+                onClick={() => setOpenSelect((prev) => (prev === 'start' ? null : 'start'))}
               >
-                Start Point
+                {findPlaceNameByKey(startKey)}
               </button>
-              <button
-                type="button"
-                className="point-dropdown-trigger"
-                aria-label="Open start point list"
-                onClick={() => setOpenPicker((prev) => (prev === 'start' ? null : 'start'))}
-              >
-                ▾
-              </button>
-              {openPicker === 'start' ? (
-                <ul className="point-dropdown-list" role="listbox" aria-label="Start point list">
+              {openSelect === 'start' ? (
+                <ul className="point-select-list">
                   {selectablePlaces.map((place) => (
-                    <li key={`start-${place.key}`}>
+                    <li key={`start-li-${place.key}`}>
                       <button
                         type="button"
                         className={startKey === place.key ? 'point-option is-selected' : 'point-option'}
                         onClick={() => handlePointSelectorChange('start', place.key)}
                       >
-                        <span>{place.name}</span>
-                        {startKey === place.key ? <span className="point-option-check">✓</span> : null}
+                        {place.name}
                       </button>
                     </li>
                   ))}
@@ -1053,43 +1047,40 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
           </div>
 
           <div className="point-picker">
-            <div className="point-split-button">
+            <button
+              type="button"
+              className={selectionMode === 'selecting_waypoint' ? 'mode-button is-active' : 'mode-button'}
+              onClick={() => setSelectionMode('selecting_waypoint')}
+            >
+              Waypoint
+            </button>
+            <div className="point-select-wrap">
               <button
                 type="button"
-                className={selectionMode === 'selecting_waypoint' ? 'mode-button is-active' : 'mode-button'}
-                onClick={() => setSelectionMode('selecting_waypoint')}
+                className="point-select-trigger"
+                onClick={() => setOpenSelect((prev) => (prev === 'waypoint' ? null : 'waypoint'))}
               >
-                Waypoint
+                {waypointKey ? findPlaceNameByKey(waypointKey) : 'None'}
               </button>
-              <button
-                type="button"
-                className="point-dropdown-trigger"
-                aria-label="Open waypoint list"
-                onClick={() => setOpenPicker((prev) => (prev === 'waypoint' ? null : 'waypoint'))}
-              >
-                ▾
-              </button>
-              {openPicker === 'waypoint' ? (
-                <ul className="point-dropdown-list" role="listbox" aria-label="Waypoint list">
+              {openSelect === 'waypoint' ? (
+                <ul className="point-select-list">
                   <li>
                     <button
                       type="button"
                       className={waypointKey === '' ? 'point-option is-selected' : 'point-option'}
                       onClick={() => handlePointSelectorChange('waypoint', '')}
                     >
-                      <span>None</span>
-                      {waypointKey === '' ? <span className="point-option-check">✓</span> : null}
+                      None
                     </button>
                   </li>
                   {selectablePlaces.map((place) => (
-                    <li key={`waypoint-${place.key}`}>
+                    <li key={`way-li-${place.key}`}>
                       <button
                         type="button"
                         className={waypointKey === place.key ? 'point-option is-selected' : 'point-option'}
                         onClick={() => handlePointSelectorChange('waypoint', place.key)}
                       >
-                        <span>{place.name}</span>
-                        {waypointKey === place.key ? <span className="point-option-check">✓</span> : null}
+                        {place.name}
                       </button>
                     </li>
                   ))}
@@ -1099,33 +1090,31 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
           </div>
 
           <div className="point-picker">
-            <div className="point-split-button">
+            <button
+              type="button"
+              className={selectionMode === 'selecting_end' ? 'mode-button is-active' : 'mode-button'}
+              onClick={() => setSelectionMode('selecting_end')}
+            >
+              End Point
+            </button>
+            <div className="point-select-wrap">
               <button
                 type="button"
-                className={selectionMode === 'selecting_end' ? 'mode-button is-active' : 'mode-button'}
-                onClick={() => setSelectionMode('selecting_end')}
+                className="point-select-trigger"
+                onClick={() => setOpenSelect((prev) => (prev === 'end' ? null : 'end'))}
               >
-                End Point
+                {findPlaceNameByKey(endKey)}
               </button>
-              <button
-                type="button"
-                className="point-dropdown-trigger"
-                aria-label="Open end point list"
-                onClick={() => setOpenPicker((prev) => (prev === 'end' ? null : 'end'))}
-              >
-                ▾
-              </button>
-              {openPicker === 'end' ? (
-                <ul className="point-dropdown-list" role="listbox" aria-label="End point list">
+              {openSelect === 'end' ? (
+                <ul className="point-select-list">
                   {selectablePlaces.map((place) => (
-                    <li key={`end-${place.key}`}>
+                    <li key={`end-li-${place.key}`}>
                       <button
                         type="button"
                         className={endKey === place.key ? 'point-option is-selected' : 'point-option'}
                         onClick={() => handlePointSelectorChange('end', place.key)}
                       >
-                        <span>{place.name}</span>
-                        {endKey === place.key ? <span className="point-option-check">✓</span> : null}
+                        {place.name}
                       </button>
                     </li>
                   ))}
@@ -1137,7 +1126,7 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
 
         <div className="control-row control-row-bottom">
           <button className="mode-button generate-button" type="button" onClick={handleGenerateRoute}>
-            Generate Route
+            Generate your Path!
           </button>
         </div>
       </section>
