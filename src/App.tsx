@@ -21,8 +21,8 @@ function App() {
       <div className="app-main">
         <Routes>
           <Route index element={<LandingPage />} />
-          <Route path="shortest" element={<Planner variant="shortest" />} />
-          <Route path="planner" element={<Planner />} />
+          <Route path="shortest" element={<Planner key="shortest-mode" variant="shortest" />} />
+          <Route path="planner" element={<Planner key="running-mode" variant="running" />} />
           <Route path="help" element={<HelpPage />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
