@@ -13,7 +13,7 @@
 
 .app-shell {
   min-height: 100svh;
-  background: linear-gradient(180deg, #f6f7e6 0%, #f9faee 100%);
+  background: linear-gradient(180deg, #f2f6e7 0%, #eef5df 52%, #f6f9eb 100%);
 }
 
 .app-main {
@@ -26,8 +26,8 @@
   left: 0;
   right: 0;
   z-index: 30;
-  background: rgba(234, 241, 206, 0.97);
-  border-bottom: 1px solid #c6d48f;
+  background: rgba(210, 228, 172, 0.98);
+  border-bottom: 1px solid #98b760;
   backdrop-filter: blur(6px);
 }
 
@@ -78,14 +78,14 @@
 }
 
 .top-nav-link:hover {
-  background: rgba(199, 220, 116, 0.2);
-  border-color: #bfd27a;
+  background: rgba(132, 176, 66, 0.2);
+  border-color: #95bb57;
 }
 
 .top-nav-link.is-active {
-  background: #cfe47f;
-  border-color: #9bb84f;
-  color: #22320f;
+  background: #94bf4f;
+  border-color: #6e9833;
+  color: #1b2b0c;
 }
 
 .top-nav-link.is-disabled {
@@ -192,9 +192,9 @@
   align-items: stretch;
   justify-content: center;
   padding: 14px;
-  border: 1px solid #d3dca6;
+  border: 1px solid #b9cc80;
   border-radius: 14px;
-  background: rgba(255, 255, 255, 0.86);
+  background: #fcfdf6;
 }
 
 .control-row {
@@ -264,8 +264,8 @@
 }
 
 .mode-button {
-  border: 1px solid #b7cb6b;
-  background: #eef5cf;
+  border: 1px solid #9fbd5a;
+  background: #dceaae;
   color: #2b3f16;
   border-radius: 999px;
   padding: 9px 14px;
@@ -275,14 +275,15 @@
 }
 
 .mode-button.is-active {
-  border-color: #90ad39;
-  background: #d8e88e;
+  border-color: #6e9833;
+  background: #9ec95a;
   color: #1f2e11;
 }
 
 .generate-button {
-  background: #cfe47f;
-  border-color: #8ba83a;
+  background: #7eab3f;
+  border-color: #5e852b;
+  color: #f6ffe9;
   min-width: 360px;
 }
 
@@ -499,9 +500,9 @@
 
 .route-info-panel {
   width: min(1100px, 100%);
-  border: 1px solid #d3dca6;
+  border: 1px solid #b9cc80;
   border-radius: 14px;
-  background: rgba(255, 255, 255, 0.86);
+  background: #fcfdf6;
   padding: 14px;
   text-align: left;
 }
@@ -511,7 +512,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  justify-content: flex-start;
+  justify-content: center;
   margin-top: -4px;
 }
 
@@ -546,7 +547,7 @@
   padding: 10px 12px;
   border: 1px solid #b8ce72;
   border-radius: 12px;
-  background: #ffffff;
+  background: #f7faee;
   white-space: normal;
   overflow-wrap: anywhere;
   display: flex;
@@ -555,13 +556,13 @@
 }
 
 .candidate-item:hover {
-  background: #edf5cf;
+  background: #e8f2cb;
 }
 
 .candidate-item.is-active {
-  border-color: #8bab3a;
-  box-shadow: 0 0 0 1px #8bab3a inset;
-  background: #deebb1;
+  border-color: #6e9833;
+  box-shadow: 0 0 0 1px #6e9833 inset;
+  background: #cfe3a2;
 }
 
 .candidate-item-title {

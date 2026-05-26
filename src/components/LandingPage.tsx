@@ -9,7 +9,7 @@ export function LandingPage() {
       <div className="landing-bg" style={{ backgroundImage: `url(${coverSrc})` }} />
       <div className="landing-overlay" />
       <div className="landing-content">
-        <h1 className="landing-title">PacePath: Smart Route Planner</h1>
+        <h1 className="landing-title">Generate your path, run at your pace</h1>
         <p className="landing-desc">
           A graph-based running route planner for Westlake University campus spaces.
         </p>
