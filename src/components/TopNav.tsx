@@ -8,7 +8,7 @@ export function TopNav() {
       <div className="top-nav-inner">
         <NavLink to="/" className="brand-link">
           <img className="brand-logo" src={logoSrc} alt="PacePath logo" />
-          <span>PacePath</span>
+          <span className="brand-text">PacePath</span>
         </NavLink>
         <nav className="top-nav-links" aria-label="Primary">
           <NavLink
@@ -34,7 +34,7 @@ export function TopNav() {
             to="/help"
             className={({ isActive }) => (isActive ? 'top-nav-link is-active' : 'top-nav-link')}
           >
-            Help&Contact
+            Help & Contact
           </NavLink>
         </nav>
       </div>
