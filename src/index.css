@@ -11,6 +11,9 @@
   --color-border: #d9e2cf;
   --color-border-strong: #bfd0b0;
   --color-focus: #2f6b3f;
+  --color-preset-active: #c5e0a0;
+  --color-preset-active-border: #8ab54a;
+  --color-preset-active-text: #1a4d0a;
   --color-route-shortest: #2f80ed;
   --color-route-main: #f28c28;
   --color-route-warmup: #4caf50;

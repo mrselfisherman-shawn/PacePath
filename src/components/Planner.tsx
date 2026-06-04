@@ -175,10 +175,20 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
   const playStartRef = useRef<number | null>(null)
   const [openSelect, setOpenSelect] = useState<'start' | 'waypoint' | 'end' | null>(null)
   const pointSelectWrapRef = useRef<HTMLDivElement | null>(null)
+  const [activeDistancePreset, setActiveDistancePreset] = useState('')
+  const [activePacePreset, setActivePacePreset] = useState('')
+  const [generateClicked, setGenerateClicked] = useState(false)
+  const [playClicked, setPlayClicked] = useState(false)
+  const [mapScale, setMapScale] = useState(1)
+  const mapContainerRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     setPaceText(formatPaceSeconds(paceSeconds))
   }, [paceSeconds])
+
+  useEffect(() => {
+    setGenerateClicked(false)
+  }, [startKey, endKey, waypointKey, targetDistanceKmInput, paceSeconds])
 
   useEffect(() => {
     function handleDocClick(event: MouseEvent) {
@@ -196,6 +206,15 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
       event.preventDefault()
       action()
     }
+  }
+
+  function handleMapWheel(e: React.WheelEvent) {
+    e.preventDefault()
+    setMapScale((prev) => {
+      const delta = e.deltaY > 0 ? -0.1 : 0.1
+      const next = Math.round((prev + delta) * 10) / 10
+      return Math.min(3, Math.max(0.5, next))
+    })
   }
 
   const nodeMap = useMemo(() => {
@@ -397,6 +416,7 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
     setIsRoutePlaying(false)
     setRoutePlayProgress(0)
     playStartRef.current = null
+    setPlayClicked(false)
   }, [selectedCandidateId, routeNodeIds.join('|')])
 
   useEffect(() => {
@@ -853,6 +873,7 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
 
     if (selectionMode === 'selecting_start') {
       setStartKey(place.key)
+      setSelectionMode('selecting_end')
       return
     }
 
@@ -867,7 +888,10 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
   }
 
   function handlePointSelectorChange(kind: 'start' | 'waypoint' | 'end', value: string) {
-    if (kind === 'start') setStartKey(value)
+    if (kind === 'start') {
+      setStartKey(value)
+      setSelectionMode('selecting_end')
+    }
     if (kind === 'waypoint') setWaypointKey(value)
     if (kind === 'end') setEndKey(value)
     setOpenSelect(null)
@@ -952,21 +976,24 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
                 step="0.1"
                 inputMode="decimal"
                 autoComplete="off"
-                placeholder="e.g. 3"
+                placeholder="Type or click a value."
                 value={targetDistanceKmInput}
-                onChange={(event) => setTargetDistanceKmInput(event.target.value)}
+                onChange={(event) => {
+                  setTargetDistanceKmInput(event.target.value)
+                  setActiveDistancePreset('')
+                }}
               />
             </label>
-            <button className="mode-button" type="button" onClick={() => setTargetDistanceKmInput('1')}>
+            <button className={`mode-button${activeDistancePreset === '1' ? ' is-active' : ''}`} type="button" onClick={() => { setTargetDistanceKmInput('1'); setActiveDistancePreset('1') }}>
               1 Km
             </button>
-            <button className="mode-button" type="button" onClick={() => setTargetDistanceKmInput('2')}>
+            <button className={`mode-button${activeDistancePreset === '2' ? ' is-active' : ''}`} type="button" onClick={() => { setTargetDistanceKmInput('2'); setActiveDistancePreset('2') }}>
               2 Km
             </button>
-            <button className="mode-button" type="button" onClick={() => setTargetDistanceKmInput('3')}>
+            <button className={`mode-button${activeDistancePreset === '3' ? ' is-active' : ''}`} type="button" onClick={() => { setTargetDistanceKmInput('3'); setActiveDistancePreset('3') }}>
               3 Km
             </button>
-            <button className="mode-button" type="button" onClick={() => setTargetDistanceKmInput('5')}>
+            <button className={`mode-button${activeDistancePreset === '5' ? ' is-active' : ''}`} type="button" onClick={() => { setTargetDistanceKmInput('5'); setActiveDistancePreset('5') }}>
               5 Km
             </button>
           </div>
@@ -983,6 +1010,7 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
                 value={paceText}
                 onChange={(event) => {
                   setPaceText(event.target.value)
+                  setActivePacePreset('')
                 }}
                 onBlur={() => {
                   const parsed = parsePaceToSeconds(paceText)
@@ -998,11 +1026,14 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
             {PACE_PRESETS.map((pace) => (
               <button
                 key={`pace-${pace}`}
-                className="mode-button"
+                className={`mode-button${activePacePreset === pace ? ' is-active' : ''}`}
                 type="button"
                 onClick={() => {
                   const parsed = parsePaceToSeconds(pace)
-                  if (parsed !== null) setPaceSeconds(clampPaceSeconds(snapToPaceStep(parsed)))
+                  if (parsed !== null) {
+                    setPaceSeconds(clampPaceSeconds(snapToPaceStep(parsed)))
+                    setActivePacePreset(pace)
+                  }
                 }}
               >
                 {pace}
@@ -1015,8 +1046,15 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
           <div className="point-picker">
             <button
               type="button"
-              className={selectionMode === 'selecting_start' ? 'mode-button is-active' : 'mode-button'}
+              className={
+                selectionMode === 'selecting_start'
+                  ? 'mode-button is-active'
+                  : startKey
+                    ? 'mode-button picked-start'
+                    : 'mode-button'
+              }
               onClick={() => setSelectionMode('selecting_start')}
+              title="Click on the map or select from the list to set your Start Point"
             >
               Start Point
             </button>
@@ -1049,8 +1087,15 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
           <div className="point-picker">
             <button
               type="button"
-              className={selectionMode === 'selecting_waypoint' ? 'mode-button is-active' : 'mode-button'}
+              className={
+                selectionMode === 'selecting_waypoint'
+                  ? 'mode-button is-active'
+                  : waypointKey
+                    ? 'mode-button picked-waypoint'
+                    : 'mode-button'
+              }
               onClick={() => setSelectionMode('selecting_waypoint')}
+              title="Click on the map or select from the list to add a Waypoint"
             >
               Waypoint
             </button>
@@ -1092,8 +1137,15 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
           <div className="point-picker">
             <button
               type="button"
-              className={selectionMode === 'selecting_end' ? 'mode-button is-active' : 'mode-button'}
+              className={
+                selectionMode === 'selecting_end'
+                  ? 'mode-button is-active'
+                  : endKey
+                    ? 'mode-button picked-end'
+                    : 'mode-button'
+              }
               onClick={() => setSelectionMode('selecting_end')}
+              title="Click on the map or select from the list to set your End Point"
             >
               End Point
             </button>
@@ -1125,7 +1177,14 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
         </div>
 
         <div className="control-row control-row-bottom">
-          <button className="mode-button generate-button" type="button" onClick={handleGenerateRoute}>
+          <button
+            className={`mode-button generate-button${generateClicked ? ' clicked' : ''}`}
+            type="button"
+            onClick={() => {
+              handleGenerateRoute()
+              setGenerateClicked(true)
+            }}
+          >
             Generate your Path!
           </button>
         </div>
@@ -1143,13 +1202,14 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
       ) : null}
 
       <section className="map-section" aria-label="Route map view">
-        <div className="map-container">
-          <img
-            className="map-image"
-            src={guideMapSrc}
-            alt="Campus guide map"
-          />
-          <svg className="map-overlay" viewBox="0 0 3085 3221" preserveAspectRatio="xMidYMid meet">
+        <div className="map-container" ref={mapContainerRef} onWheel={handleMapWheel}>
+          <div className="map-zoom-wrapper" style={{ transform: `scale(${mapScale})` }}>
+            <img
+              className="map-image"
+              src={guideMapSrc}
+              alt="Campus guide map"
+            />
+            <svg className="map-overlay" viewBox="0 0 3085 3221" preserveAspectRatio="xMidYMid meet">
             <g>
               {displaySegmentsWithColor.map((seg, index) => (
                 <line
@@ -1199,7 +1259,7 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
                   : isEnd
                     ? '#dc2626'
                     : isWaypoint
-                      ? '#d97706'
+                      ? '#eab308'
                       : isHovered
                         ? '#2f6b1a'
                         : '#9ecb6d'
@@ -1228,10 +1288,10 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
                         <path
                           className="picked-marker-pin"
                           fill={fill}
-                          transform={`translate(${markerX}, ${markerY - 28})`}
+                          transform={`translate(${markerX}, ${markerY - 28}) scale(2)`}
                           d="M0 -18 C9 -18 16 -11 16 -2 C16 8 8 14 0 24 C-8 14 -16 8 -16 -2 C-16 -11 -9 -18 0 -18 Z"
                         />
-                        <text x={markerX} y={markerY - 30} className="picked-marker-text">
+                        <text x={markerX} y={markerY - 42} className="picked-marker-text" style={{ fontSize: '32px' }}>
                           {markerLabel}
                         </text>
                       </g>
@@ -1260,6 +1320,12 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
               })}
             </g>
           </svg>
+          </div>
+          <div className="map-zoom-controls">
+            <button type="button" onClick={() => setMapScale((s) => Math.min(3, Math.round((s + 0.2) * 10) / 10))}>+</button>
+            <button type="button" onClick={() => setMapScale((s) => Math.max(0.5, Math.round((s - 0.2) * 10) / 10))}>-</button>
+            <button type="button" onClick={() => setMapScale(1)}>⟲</button>
+          </div>
           {!isShortestMode ? (
             <div className="map-legend" aria-label="Route legend">
               <div className="map-legend-item">
@@ -1292,21 +1358,24 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
       </section>
 
       <div className="route-playback-controls">
-        <button
-          type="button"
-          className="mode-button"
-          onClick={() => {
-            if (routeDisplaySegments.length < 2) return
-            playStartRef.current = null
-            setRoutePlayProgress(0)
-            setIsRoutePlaying(true)
-          }}
-        >
-          <span className="play-icon" aria-hidden="true">
-            ▶
-          </span>{' '}
-          Play Route
-        </button>
+        {routeDisplaySegments.length >= 2 ? (
+          <button
+            type="button"
+            className={`mode-button generate-button play-route-button${playClicked ? ' clicked' : ''}`}
+            onClick={() => {
+              if (routeDisplaySegments.length < 2) return
+              playStartRef.current = null
+              setRoutePlayProgress(0)
+              setIsRoutePlaying(true)
+              setPlayClicked(true)
+            }}
+          >
+            <span className="play-icon" aria-hidden="true">
+              {routePlayProgress >= 1 && !isRoutePlaying ? '↻' : '▶'}
+            </span>{' '}
+            Play Route
+          </button>
+        ) : null}
       </div>
 
       <section className="route-info-panel" aria-label="Route details">
