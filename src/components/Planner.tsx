@@ -55,7 +55,7 @@ function buildDirectionalOffsetSegments(points: MapPoint[], offsetPx = 10): MapS
   return shifted
 }
 
-type SelectionMode = 'selecting_start' | 'selecting_end' | 'selecting_waypoint'
+type SelectionMode = 'selecting_start' | 'selecting_end' | 'selecting_waypoint' | null
 
 type PlaceOption = {
   key: string
@@ -137,12 +137,21 @@ function snapToPaceStep(seconds: number): number {
 }
 
 function formatMinutesToClock(totalMin: number): string {
+  if (!Number.isFinite(totalMin) || totalMin < 0) return '0m'
   const min = Math.max(0, totalMin)
   const h = Math.floor(min / 60)
   const m = Math.floor(min % 60)
   const s = Math.round((min - Math.floor(min)) * 60)
   if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
   return `${m}:${String(s).padStart(2, '0')}`
+}
+
+function getStars(score: number): string {
+  if (score <= 500) return '★★★★★'
+  if (score <= 1500) return '★★★★☆'
+  if (score <= 3000) return '★★★☆☆'
+  if (score <= 5000) return '★★☆☆☆'
+  return '★☆☆☆☆'
 }
 
 export function Planner({ variant = 'running' }: { variant?: 'running' | 'shortest' }) {
@@ -160,11 +169,10 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
   const [waypointKey, setWaypointKey] = useState('')
   const [targetDistanceKmInput, setTargetDistanceKmInput] = useState('')
   const [routeError, setRouteError] = useState('')
-  const [routeNotice, setRouteNotice] = useState('')
   const [routeNodeIds, setRouteNodeIds] = useState<string[]>([])
   const [routeEdgeIds, setRouteEdgeIds] = useState<string[]>([])
   const [routeSummary, setRouteSummary] = useState<RouteSummary | null>(null)
-  const [routeCandidate, setRouteCandidate] = useState<RouteCandidate | null>(null)
+  const [_routeCandidate, setRouteCandidate] = useState<RouteCandidate | null>(null)
   const [routeCandidates, setRouteCandidates] = useState<RouteCandidate[]>([])
   const [selectedCandidateId, setSelectedCandidateId] = useState('')
   const [hoveredPlaceKey, setHoveredPlaceKey] = useState('')
@@ -177,9 +185,14 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
   const pointSelectWrapRef = useRef<HTMLDivElement | null>(null)
   const [activeDistancePreset, setActiveDistancePreset] = useState('')
   const [activePacePreset, setActivePacePreset] = useState('')
-  const [generateClicked, setGenerateClicked] = useState(false)
   const [playClicked, setPlayClicked] = useState(false)
   const [mapScale, setMapScale] = useState(1)
+  const [mapPan, setMapPan] = useState({ x: 0, y: 0 })
+  const [isDragging, setIsDragging] = useState(false)
+  const dragStartRef = useRef({ clientX: 0, clientY: 0, panX: 0, panY: 0 })
+  const isPinchingRef = useRef(false)
+  const pinchStartDistanceRef = useRef(0)
+  const pinchStartScaleRef = useRef(1)
   const mapContainerRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
@@ -187,8 +200,14 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
   }, [paceSeconds])
 
   useEffect(() => {
-    setGenerateClicked(false)
-  }, [startKey, endKey, waypointKey, targetDistanceKmInput, paceSeconds])
+    setRouteNodeIds([])
+    setRouteEdgeIds([])
+    setRouteSummary(null)
+    setRouteCandidate(null)
+    setRouteCandidates([])
+    setSelectedCandidateId('')
+    setRouteError('')
+  }, [startKey, endKey, waypointKey, targetDistanceKmInput])
 
   useEffect(() => {
     function handleDocClick(event: MouseEvent) {
@@ -215,6 +234,53 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
       const next = Math.round((prev + delta) * 10) / 10
       return Math.min(3, Math.max(0.5, next))
     })
+  }
+
+  function handleMapPointerDown(e: React.PointerEvent) {
+    if (e.button !== 0) return
+    if (isPinchingRef.current) return
+    setIsDragging(true)
+    dragStartRef.current = { clientX: e.clientX, clientY: e.clientY, panX: mapPan.x, panY: mapPan.y }
+  }
+
+  function handleMapPointerMove(e: React.PointerEvent) {
+    if (!isDragging) return
+    if (isPinchingRef.current) return
+    const dx = e.clientX - dragStartRef.current.clientX
+    const dy = e.clientY - dragStartRef.current.clientY
+    setMapPan({ x: dragStartRef.current.panX + dx, y: dragStartRef.current.panY + dy })
+  }
+
+  function handleMapPointerUp() {
+    setIsDragging(false)
+  }
+
+  function handleTouchStart(e: React.TouchEvent) {
+    if (e.touches.length === 2) {
+      isPinchingRef.current = true
+      const dx = e.touches[0].clientX - e.touches[1].clientX
+      const dy = e.touches[0].clientY - e.touches[1].clientY
+      pinchStartDistanceRef.current = Math.hypot(dx, dy)
+      pinchStartScaleRef.current = mapScale
+    }
+  }
+
+  function handleTouchMove(e: React.TouchEvent) {
+    if (!isPinchingRef.current || e.touches.length !== 2) return
+    e.preventDefault()
+    const dx = e.touches[0].clientX - e.touches[1].clientX
+    const dy = e.touches[0].clientY - e.touches[1].clientY
+    const distance = Math.hypot(dx, dy)
+    const newScale = Math.min(3, Math.max(0.5,
+      pinchStartScaleRef.current * distance / pinchStartDistanceRef.current
+    ))
+    setMapScale(newScale)
+  }
+
+  function handleTouchEnd(e: React.TouchEvent) {
+    if (e.touches.length < 2) {
+      isPinchingRef.current = false
+    }
   }
 
   const nodeMap = useMemo(() => {
@@ -519,7 +585,7 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
     const waypointSameAsStart = hasWaypoint && waypointPlace.key === startPlace.key
     const waypointSameAsEnd = hasWaypoint && waypointPlace.key === endPlace.key
 
-    setRouteNotice('')
+    setRouteError('')
 
     if (isShortestMode && !hasWaypoint && isSameStartEnd) {
       setRouteNodeIds([])
@@ -536,7 +602,7 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
       setRouteSummary(null)
       setRouteCandidate(null)
       setRouteError('')
-      setRouteNotice('起点和终点相同时，请输入目标跑步距离，或选择一个途经点来生成环线。')
+      setRouteError('起点和终点相同时，请输入目标跑步距离，或选择一个途经点来生成环线。')
       return
     }
 
@@ -566,15 +632,15 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
       if (alternatives.length > 0) {
         applyCandidate(alternatives[0])
         if (alternatives[0].warnings.includes('under_target_fallback')) {
-          setRouteNotice('当前路网限制下未能完全达到目标距离，已返回最接近路线。')
+          setRouteError('当前路网限制下未能完全达到目标距离，已返回最接近路线。')
         } else {
-          setRouteNotice('该路线包含重复路段，用于匹配目标距离。')
+          setRouteError('该路线包含重复路段，用于匹配目标距离。')
         }
       } else {
         setRouteNodeIds([])
         setRouteEdgeIds([])
         setRouteCandidate(null)
-        setRouteNotice('当前路网限制下未能生成可用环线。')
+        setRouteError('当前路网限制下未能生成可用环线。')
       }
       return
     }
@@ -611,9 +677,9 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
 
     if (hasWaypoint && waypointPlace && !useWaypoint) {
       if (waypointSameAsStart && !isSameStartEnd) {
-        setRouteNotice('途经点与起点相同，将按起点到终点路线计算。')
+        setRouteError('途经点与起点相同，将按起点到终点路线计算。')
       } else if (waypointSameAsEnd && !isSameStartEnd) {
-        setRouteNotice('途经点与终点相同，将按起点到终点路线计算。')
+        setRouteError('途经点与终点相同，将按起点到终点路线计算。')
       }
     }
 
@@ -851,9 +917,9 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
       if (alternatives.length > 0) {
         applyCandidate(alternatives[0])
         if (alternatives[0].warnings.includes('under_target_fallback')) {
-          setRouteNotice('当前路网限制下未能完全达到目标距离，已返回最接近路线。')
+          setRouteError('当前路网限制下未能完全达到目标距离，已返回最接近路线。')
         } else if (alternatives[0].usedLoop) {
-          setRouteNotice('该路线包含重复路段，用于匹配目标距离。')
+          setRouteError('该路线包含重复路段，用于匹配目标距离。')
         }
       }
     }
@@ -879,21 +945,30 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
 
     if (selectionMode === 'selecting_end') {
       setEndKey(place.key)
+      setSelectionMode(null)
       return
     }
 
     if (selectionMode === 'selecting_waypoint') {
       setWaypointKey(place.key)
+      setSelectionMode(null)
     }
   }
 
   function handlePointSelectorChange(kind: 'start' | 'waypoint' | 'end', value: string) {
+    setRouteError('')
     if (kind === 'start') {
       setStartKey(value)
       setSelectionMode('selecting_end')
     }
-    if (kind === 'waypoint') setWaypointKey(value)
-    if (kind === 'end') setEndKey(value)
+    if (kind === 'waypoint') {
+      setWaypointKey(value)
+      setSelectionMode(null)
+    }
+    if (kind === 'end') {
+      setEndKey(value)
+      setSelectionMode(null)
+    }
     setOpenSelect(null)
   }
 
@@ -922,36 +997,28 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
     }
   }, [routeSummary, routeEdgeIds, edgeMap, calibration])
 
-  const timeEstimate = useMemo(() => {
-    if (isShortestMode) return null
-    const paceMinPerKm = paceSeconds / 60
-    if (!paceMinPerKm) return null
 
-    const actualDistanceM = routeCandidate?.actualDistanceM ?? routeMeta?.estimatedLengthM ?? null
-    if (actualDistanceM === null || actualDistanceM <= 0) return null
-
-    const actualKm = actualDistanceM / 1000
-    const minMinutes = actualKm * paceMinPerKm
-
-    if (targetDistanceM === null) {
-      return {
-        minText: formatMinutesToClock(minMinutes),
-        maxText: formatMinutesToClock(minMinutes),
-        note: `Walking pace assumption for overflow: ${formatMinutesToClock(WALKING_PACE_MIN_PER_KM)} / km`,
-      }
+  const guidanceText = useMemo<{ text: string; type: 'info' | 'error' }>(() => {
+    if (routeError) {
+      return { text: routeError, type: 'error' }
     }
-
-    const overflowM = Math.max(0, actualDistanceM - targetDistanceM)
-    const targetKm = targetDistanceM / 1000
-    const overflowKm = overflowM / 1000
-    const maxMinutes = targetKm * paceMinPerKm + overflowKm * WALKING_PACE_MIN_PER_KM
-
-    return {
-      minText: formatMinutesToClock(minMinutes),
-      maxText: formatMinutesToClock(Math.max(minMinutes, maxMinutes)),
-      note: `Walking pace assumption for overflow: ${formatMinutesToClock(WALKING_PACE_MIN_PER_KM)} / km`,
+    if (selectionMode === 'selecting_start') {
+      return { text: 'Click on the map or select from the list to set your Start Point.', type: 'info' }
     }
-  }, [isShortestMode, paceSeconds, routeCandidate?.actualDistanceM, routeMeta?.estimatedLengthM, targetDistanceM])
+    if (selectionMode === 'selecting_end') {
+      return { text: 'Click on the map or select from the list to set your End Point.', type: 'info' }
+    }
+    if (selectionMode === 'selecting_waypoint') {
+      return { text: 'Click on the map or select from the list to add a Waypoint.', type: 'info' }
+    }
+    if (!startKey && !endKey) {
+      return { text: 'Click on the map or select from the list to set your Start Point.', type: 'info' }
+    }
+    if (!waypointKey) {
+      return { text: 'Select a waypoint or generate the route.', type: 'info' }
+    }
+    return { text: 'Waypoint selected. Generate the route when you are ready.', type: 'info' }
+  }, [routeError, selectionMode, startKey, endKey, waypointKey])
 
   return (
     <main className="page">
@@ -1046,14 +1113,14 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
           <div className="point-picker">
             <button
               type="button"
-              className={
+              className={'mode-button ' + (
                 selectionMode === 'selecting_start'
-                  ? 'mode-button is-active'
+                  ? 'point-selecting'
                   : startKey
-                    ? 'mode-button picked-start'
-                    : 'mode-button'
-              }
-              onClick={() => setSelectionMode('selecting_start')}
+                    ? 'point-complete-start'
+                    : 'point-unselected'
+              )}
+              onClick={() => { setSelectionMode('selecting_start'); setRouteError('') }}
               title="Click on the map or select from the list to set your Start Point"
             >
               Start Point
@@ -1087,14 +1154,14 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
           <div className="point-picker">
             <button
               type="button"
-              className={
+              className={'mode-button ' + (
                 selectionMode === 'selecting_waypoint'
-                  ? 'mode-button is-active'
+                  ? 'point-selecting'
                   : waypointKey
-                    ? 'mode-button picked-waypoint'
-                    : 'mode-button'
-              }
-              onClick={() => setSelectionMode('selecting_waypoint')}
+                    ? 'point-complete-waypoint'
+                    : 'point-unselected'
+              )}
+              onClick={() => { setSelectionMode('selecting_waypoint'); setRouteError('') }}
               title="Click on the map or select from the list to add a Waypoint"
             >
               Waypoint
@@ -1137,14 +1204,14 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
           <div className="point-picker">
             <button
               type="button"
-              className={
+              className={'mode-button ' + (
                 selectionMode === 'selecting_end'
-                  ? 'mode-button is-active'
+                  ? 'point-selecting'
                   : endKey
-                    ? 'mode-button picked-end'
-                    : 'mode-button'
-              }
-              onClick={() => setSelectionMode('selecting_end')}
+                    ? 'point-complete-end'
+                    : 'point-unselected'
+              )}
+              onClick={() => { setSelectionMode('selecting_end'); setRouteError('') }}
               title="Click on the map or select from the list to set your End Point"
             >
               End Point
@@ -1178,11 +1245,28 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
 
         <div className="control-row control-row-bottom">
           <button
-            className={`mode-button generate-button${generateClicked ? ' clicked' : ''}`}
+            className={'mode-button generate-button ' + (
+              routeNodeIds.length > 0
+                ? 'is-generated'
+                : (startKey && endKey && (isShortestMode || targetDistanceM !== null))
+                  ? 'is-ready'
+                  : 'is-disabled'
+            )}
             type="button"
             onClick={() => {
+              if (!startKey) {
+                setRouteError('Please select a start point.')
+                return
+              }
+              if (!endKey) {
+                setRouteError('Please select an end point.')
+                return
+              }
+              if (!isShortestMode && targetDistanceM === null) {
+                setRouteError('Please enter or select a target distance.')
+                return
+              }
               handleGenerateRoute()
-              setGenerateClicked(true)
             }}
           >
             Generate your Path!
@@ -1190,20 +1274,25 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
         </div>
       </section>
 
-      {routeError ? (
-        <p className="route-error" aria-live="polite">
-          {routeError}
-        </p>
-      ) : null}
-      {routeNotice ? (
-        <p className="route-notice" aria-live="polite">
-          {routeNotice}
-        </p>
-      ) : null}
+      <p className={'route-guidance ' + (guidanceText.type === 'error' ? 'is-error' : 'is-info')} aria-live="polite">
+        {guidanceText.text}
+      </p>
 
       <section className="map-section" aria-label="Route map view">
-        <div className="map-container" ref={mapContainerRef} onWheel={handleMapWheel}>
-          <div className="map-zoom-wrapper" style={{ transform: `scale(${mapScale})` }}>
+        <div
+          className="map-container"
+          ref={mapContainerRef}
+          onWheel={handleMapWheel}
+          onPointerDown={handleMapPointerDown}
+          onPointerMove={handleMapPointerMove}
+          onPointerUp={handleMapPointerUp}
+          onPointerLeave={handleMapPointerUp}
+          onTouchStart={handleTouchStart}
+          onTouchMove={handleTouchMove}
+          onTouchEnd={handleTouchEnd}
+          style={{ cursor: isDragging ? 'grabbing' : 'grab' }}
+        >
+          <div className="map-zoom-wrapper" style={{ transform: `translate(${mapPan.x}px, ${mapPan.y}px) scale(${mapScale})` }}>
             <img
               className="map-image"
               src={guideMapSrc}
@@ -1358,24 +1447,28 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
       </section>
 
       <div className="route-playback-controls">
-        {routeDisplaySegments.length >= 2 ? (
-          <button
-            type="button"
-            className={`mode-button generate-button play-route-button${playClicked ? ' clicked' : ''}`}
-            onClick={() => {
-              if (routeDisplaySegments.length < 2) return
-              playStartRef.current = null
-              setRoutePlayProgress(0)
-              setIsRoutePlaying(true)
-              setPlayClicked(true)
-            }}
-          >
-            <span className="play-icon" aria-hidden="true">
-              {routePlayProgress >= 1 && !isRoutePlaying ? '↻' : '▶'}
-            </span>{' '}
-            Play Route
-          </button>
-        ) : null}
+        <button
+          type="button"
+          className={'mode-button generate-button play-route-button ' + (
+            routeNodeIds.length === 0
+              ? 'is-disabled'
+              : playClicked
+                ? 'is-generated'
+                : 'is-ready'
+          )}
+          onClick={() => {
+            if (routeNodeIds.length === 0) return
+            playStartRef.current = null
+            setRoutePlayProgress(0)
+            setIsRoutePlaying(true)
+            setPlayClicked(true)
+          }}
+        >
+          <span className="play-icon" aria-hidden="true">
+            {routePlayProgress >= 1 && !isRoutePlaying ? '↻' : '▶'}
+          </span>{' '}
+          Play Route
+        </button>
       </div>
 
       <section className="route-info-panel" aria-label="Route details">
@@ -1385,13 +1478,7 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
             Active route: {routeMeta.startName}
             {routeMeta.viaName ? ` -> ${routeMeta.viaName}` : ''}
             {' -> '}
-            {routeMeta.endName} | {routeMeta.estimatedLengthText ?? '-'}
-            {routeCandidate ? ` | Mode: ${routeCandidate.routeMode}` : ''}
-          </p>
-        ) : null}
-        {!isShortestMode && timeEstimate ? (
-          <p className="route-option-meta">
-            Estimated training time: {timeEstimate.minText} - {timeEstimate.maxText} | {timeEstimate.note}
+            {routeMeta.endName}
           </p>
         ) : null}
         {isShortestMode ? (
@@ -1405,37 +1492,47 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
             {routeCandidates.length === 0 ? (
               <p>No route options yet. Set a target distance and generate route.</p>
             ) : (
-              routeCandidates.map((candidate, index) => (
-                <button
-                  key={candidate.id}
-                  type="button"
-                  className={selectedCandidateId === candidate.id ? 'candidate-item is-active' : 'candidate-item'}
-                  onClick={() => applyCandidate(candidate)}
-                >
-                  <span className="candidate-item-title">Option {index + 1}</span>
-                  <span className="candidate-item-meta">
-                    {(candidate.totalLengthM / 1000).toFixed(2)} km | diff{' '}
-                    {candidate.differencePercent >= 0 ? '+' : ''}
-                    {candidate.differencePercent.toFixed(1)}% ({candidate.qualityLabel} / {candidate.routeMode})
-                    {candidate.popularEdgeRatio > 0
-                      ? ` | Popular ${(candidate.popularEdgeRatio * 100).toFixed(0)}%`
-                      : ''}
-                    {candidate.preferredEdgeRatio > 0
-                      ? ` | Preferred ${(candidate.preferredEdgeRatio * 100).toFixed(0)}%`
-                      : ''}
-                    {candidate.scenicAverage > 0
-                      ? ` | Scenic ${(candidate.scenicAverage * 100).toFixed(0)}%`
-                      : ''}
-                    {(candidate.qualityLabel === 'recommended' || candidate.qualityLabel === 'acceptable') &&
-                    (candidate.preferredEdgeRatio > 0 || candidate.popularEdgeRatio > 0)
-                      ? ' | Recommended'
-                      : ''}
-                    {candidate.warnings.includes('under_target_fallback')
-                      ? ' | under target fallback'
-                      : ''}
-                  </span>
-                </button>
-              ))
+              routeCandidates.map((candidate, index) => {
+                const paceMinPerKm = paceSeconds / 60
+                const actualKm = candidate.actualDistanceM / 1000
+                const minMin = actualKm * paceMinPerKm
+                let maxMin = minMin
+                if (targetDistanceM !== null) {
+                  const targetKm = targetDistanceM / 1000
+                  const overflowKm = Math.max(0, actualKm - targetKm)
+                  maxMin = targetKm * paceMinPerKm + overflowKm * WALKING_PACE_MIN_PER_KM
+                }
+                const timeText = `~${formatMinutesToClock(minMin)}` + (maxMin > minMin ? `–${formatMinutesToClock(maxMin)}` : '') + ' min'
+
+                return (
+                  <button
+                    key={candidate.id}
+                    type="button"
+                    className={selectedCandidateId === candidate.id ? 'candidate-item is-active' : 'candidate-item'}
+                    onClick={() => applyCandidate(candidate)}
+                  >
+                    <span className="candidate-item-title">Option {index + 1}</span>
+                    <div className="candidate-item-row">
+                      <span className="candidate-item-meta">
+                        {(candidate.totalLengthM / 1000).toFixed(2)} km | {timeText}
+                        {candidate.popularEdgeRatio > 0
+                          ? ` | Popular ${(candidate.popularEdgeRatio * 100).toFixed(0)}%`
+                          : ''}
+                        {candidate.preferredEdgeRatio > 0
+                          ? ` | Preferred ${(candidate.preferredEdgeRatio * 100).toFixed(0)}%`
+                          : ''}
+                        {candidate.scenicAverage > 0
+                          ? ` | Scenic ${(candidate.scenicAverage * 100).toFixed(0)}%`
+                          : ''}
+                        {candidate.warnings.includes('under_target_fallback')
+                          ? ' | under target fallback'
+                          : ''}
+                      </span>
+                      <span className="candidate-item-stars">{getStars(candidate.score)}</span>
+                    </div>
+                  </button>
+                )
+              })
             )}
           </div>
         )}

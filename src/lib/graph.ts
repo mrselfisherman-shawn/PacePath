@@ -20,6 +20,7 @@ export type GraphEdge = {
   preferred: boolean
   scenicScore: number
   notes: string
+  isPerimeter: boolean
 }
 
 export type RoadGraph = {
@@ -37,7 +38,7 @@ function distance(a: Point, b: Point): number {
   return Math.hypot(a.x - b.x, a.y - b.y)
 }
 
-export function buildRoadGraph(rows: CsvRow[], snapTolerance = 8): RoadGraph {
+export function buildRoadGraph(rows: CsvRow[], snapTolerance = 8, perimeterRoadIds?: Set<string>): RoadGraph {
   const nodes: GraphNode[] = []
   const edges: GraphEdge[] = []
   const adjacencyMap = new Map<string, Set<string>>()
@@ -116,6 +117,7 @@ export function buildRoadGraph(rows: CsvRow[], snapTolerance = 8): RoadGraph {
         preferred,
         scenicScore,
         notes,
+        isPerimeter: perimeterRoadIds?.has(row.road_id ?? '') ?? false,
       }
       edges.push(edge)
 

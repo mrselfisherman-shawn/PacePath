@@ -3,6 +3,7 @@ import './App.css'
 import { HelpPage } from './components/HelpPage'
 import { HotRouteAnnotationMode } from './components/HotRouteAnnotationMode'
 import { LandingPage } from './components/LandingPage'
+import { PerimeterLabel } from './components/PerimeterLabel'
 import { Planner } from './components/Planner'
 import { TopNav } from './components/TopNav'
 
@@ -24,6 +25,7 @@ function App() {
           <Route path="shortest" element={<Planner key="shortest-mode" variant="shortest" />} />
           <Route path="planner" element={<Planner key="running-mode" variant="running" />} />
           <Route path="help" element={<HelpPage />} />
+          <Route path="label-perimeter" element={<PerimeterLabel />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </div>
