@@ -75,6 +75,19 @@ type GenerateAlternativeRoutesArgs = {
   penaltyFactor?: number
 }
 
+const LONG_RUN_THRESHOLD_M = 4000
+const SHORT_LOOP_THRESHOLD_M = 4000
+const ENTRY_CANDIDATE_COUNT = 5
+const MAX_PERIMETER_OVERRUN_RATIO = 1.3
+const MAX_LOOP_PERIMETER_OVERRUN_RATIO = 1.1
+const MAX_FILL_SHORTFALL_M = 1000
+const MAX_FILL_OVERRUN_RATIO = 1.15
+const MAX_FILL_REPEATED_EDGE_RATIO = 0.35
+const MIN_PERIMETER_ROUTE_RATIO = 0.25
+const MIN_SHORT_LOOP_UNDERRUN_RATIO = 0.85
+const MAX_SHORT_LOOP_OVERRUN_RATIO = 1.2
+const MAX_SHORT_LOOP_REPEATED_EDGE_RATIO = 0.3
+
 type GenerateLoopCandidatesArgs = {
   graph: RoadGraph
   loopStartNodeId: string
@@ -121,6 +134,23 @@ function edgeLengthMap(graph: RoadGraph): Map<string, number> {
   return new Map(graph.edges.map((e) => [e.edge_id, e.length_px]))
 }
 
+function perimeterEdgeRatio(graph: RoadGraph, routeEdgeIds: string[]): number {
+  const edgeMap = new Map(graph.edges.map((edge) => [edge.edge_id, edge]))
+  const edgeLen = edgeLengthMap(graph)
+  let perimeterLen = 0
+  let totalLen = 0
+
+  for (const edgeId of routeEdgeIds) {
+    const edge = edgeMap.get(edgeId)
+    const len = edgeLen.get(edgeId) ?? 0
+    if (!edge || len <= 0) continue
+    totalLen += len
+    if (edge.isPerimeter) perimeterLen += len
+  }
+
+  return totalLen > 0 ? perimeterLen / totalLen : 0
+}
+
 function uniqueRatio(edgeIds: string[]): number {
   if (edgeIds.length === 0) return 0
   const counts = new Map<string, number>()
@@ -129,11 +159,49 @@ function uniqueRatio(edgeIds: string[]): number {
   return repeated / edgeIds.length
 }
 
+function addedEdgeIds(baseRoute: SegmentRoute, route: SegmentRoute): string[] {
+  const baseCounts = new Map<string, number>()
+  for (const edgeId of baseRoute.routeEdgeIds) {
+    baseCounts.set(edgeId, (baseCounts.get(edgeId) ?? 0) + 1)
+  }
+
+  const out: string[] = []
+  for (const edgeId of route.routeEdgeIds) {
+    const remaining = baseCounts.get(edgeId) ?? 0
+    if (remaining > 0) {
+      baseCounts.set(edgeId, remaining - 1)
+    } else {
+      out.push(edgeId)
+    }
+  }
+  return out
+}
+
 function qualityFromDiff(diffPercentAbs: number): RouteCandidate['qualityLabel'] {
   if (diffPercentAbs <= 10) return 'recommended'
   if (diffPercentAbs <= 20) return 'acceptable'
   if (diffPercentAbs <= 40) return 'poor'
   return 'invalid'
+}
+
+function qualityRank(label: RouteCandidate['qualityLabel']): number {
+  if (label === 'recommended') return 0
+  if (label === 'acceptable') return 1
+  if (label === 'poor') return 2
+  return 3
+}
+
+function compareRouteCandidates(a: RouteCandidate, b: RouteCandidate): number {
+  const qualityDiff = qualityRank(a.qualityLabel) - qualityRank(b.qualityLabel)
+  if (qualityDiff !== 0) return qualityDiff
+
+  const distanceDiff = Math.abs(a.differenceM) - Math.abs(b.differenceM)
+  if (distanceDiff !== 0) return distanceDiff
+
+  const repeatDiff = a.repeatedEdgeRatio - b.repeatedEdgeRatio
+  if (repeatDiff !== 0) return repeatDiff
+
+  return a.score - b.score
 }
 
 function countImmediateBacktracks(routeNodeIds: string[]): number {
@@ -431,13 +499,13 @@ function buildPerimeterCycle(graph: RoadGraph): SegmentRoute | null {
   }
 
   const startId = perimeterEdges[0].from_node_id
-  const routeNodeIds: string[] = [startId]
+  const openCycleNodeIds: string[] = [startId]
   const routeEdgeIds: string[] = []
   let prev = startId
   let cur = adj.get(startId)![0]
 
   while (cur !== startId) {
-    routeNodeIds.push(cur)
+    openCycleNodeIds.push(cur)
     const neighbors = adj.get(cur)!
     const next = neighbors[0] === prev ? neighbors[1] : neighbors[0]
     prev = cur
@@ -449,9 +517,9 @@ function buildPerimeterCycle(graph: RoadGraph): SegmentRoute | null {
     edgeByPair.set(`${edge.from_node_id}|${edge.to_node_id}`, edge.edge_id)
   }
 
-  for (let i = 0; i < routeNodeIds.length; i++) {
-    const from = routeNodeIds[i]
-    const to = routeNodeIds[(i + 1) % routeNodeIds.length]
+  for (let i = 0; i < openCycleNodeIds.length; i++) {
+    const from = openCycleNodeIds[i]
+    const to = openCycleNodeIds[(i + 1) % openCycleNodeIds.length]
     const edgeId = edgeByPair.get(`${from}|${to}`) ?? edgeByPair.get(`${to}|${from}`)
     if (!edgeId) return null
     routeEdgeIds.push(edgeId)
@@ -460,17 +528,133 @@ function buildPerimeterCycle(graph: RoadGraph): SegmentRoute | null {
   const edgeLen = edgeLengthMap(graph)
   const totalLengthPx = routeEdgeIds.reduce((s, id) => s + (edgeLen.get(id) ?? 0), 0)
 
-  return { routeNodeIds, routeEdgeIds, totalLengthPx }
+  return { routeNodeIds: [...openCycleNodeIds, startId], routeEdgeIds, totalLengthPx }
 }
 
 function rotateCycleToStart(cycle: SegmentRoute, targetStart: string): SegmentRoute {
-  const idx = cycle.routeNodeIds.indexOf(targetStart)
-  if (idx <= 0) return cycle
+  const isClosed = cycle.routeNodeIds[0] === cycle.routeNodeIds[cycle.routeNodeIds.length - 1]
+  const openNodeIds = isClosed ? cycle.routeNodeIds.slice(0, -1) : cycle.routeNodeIds
+  const idx = openNodeIds.indexOf(targetStart)
+  if (idx < 0) return cycle
+
+  const rotatedOpenNodeIds = [...openNodeIds.slice(idx), ...openNodeIds.slice(0, idx)]
   return {
-    routeNodeIds: [...cycle.routeNodeIds.slice(idx), ...cycle.routeNodeIds.slice(0, idx)],
+    routeNodeIds: [...rotatedOpenNodeIds, targetStart],
     routeEdgeIds: [...cycle.routeEdgeIds.slice(idx), ...cycle.routeEdgeIds.slice(0, idx)],
     totalLengthPx: cycle.totalLengthPx,
   }
+}
+
+function findBestPerimeterEntry(
+  graph: RoadGraph,
+  startNodeId: string,
+  perimeterNodeIds: string[],
+): DijkstraResult | null {
+  const paths = findPerimeterAccessPaths(graph, startNodeId, perimeterNodeIds, ENTRY_CANDIDATE_COUNT)
+  return paths[0] ?? null
+}
+
+function findPerimeterAccessPaths(
+  graph: RoadGraph,
+  startNodeId: string,
+  perimeterNodeIds: string[],
+  maxCandidates: number,
+): DijkstraResult[] {
+  const startNode = graph.nodes.find((node) => node.node_id === startNodeId)
+  if (!startNode) return []
+
+  const nodeById = new Map(graph.nodes.map((node) => [node.node_id, node]))
+  const entryCandidates = perimeterNodeIds
+    .filter((nodeId, idx, arr) => arr.indexOf(nodeId) === idx)
+    .map((nodeId) => {
+      const node = nodeById.get(nodeId)
+      if (!node) return null
+      return {
+        nodeId,
+        distancePx: Math.hypot(node.x - startNode.x, node.y - startNode.y),
+      }
+    })
+    .filter((candidate): candidate is { nodeId: string; distancePx: number } => !!candidate)
+    .sort((a, b) => a.distancePx - b.distancePx)
+    .slice(0, maxCandidates)
+
+  const paths: DijkstraResult[] = []
+  for (const candidate of entryCandidates) {
+    const path = dijkstra(graph, startNodeId, candidate.nodeId)
+    if (!path.found) continue
+    paths.push(path)
+  }
+
+  return paths.sort((a, b) => a.totalLengthPx - b.totalLengthPx)
+}
+
+function reversePath(path: DijkstraResult): DijkstraResult {
+  return {
+    found: path.found,
+    routeNodeIds: [...path.routeNodeIds].reverse(),
+    routeEdgeIds: [...path.routeEdgeIds].reverse(),
+    totalLengthPx: path.totalLengthPx,
+  }
+}
+
+function buildCycleTravel(
+  graph: RoadGraph,
+  cycle: SegmentRoute,
+  entryNodeId: string,
+  exitNodeId: string,
+  forward: boolean,
+  fullLoopCount: number,
+): SegmentRoute | null {
+  const openNodeIds = cycle.routeNodeIds[0] === cycle.routeNodeIds[cycle.routeNodeIds.length - 1]
+    ? cycle.routeNodeIds.slice(0, -1)
+    : cycle.routeNodeIds
+  const n = openNodeIds.length
+  const entryIdx = openNodeIds.indexOf(entryNodeId)
+  const exitIdx = openNodeIds.indexOf(exitNodeId)
+  if (n < 3 || entryIdx < 0 || exitIdx < 0) return null
+
+  const edgeByPair = new Map<string, string>()
+  for (let i = 0; i < n; i += 1) {
+    const from = openNodeIds[i]
+    const to = openNodeIds[(i + 1) % n]
+    const edgeId = cycle.routeEdgeIds[i]
+    if (!edgeId) return null
+    edgeByPair.set(`${from}|${to}`, edgeId)
+    edgeByPair.set(`${to}|${from}`, edgeId)
+  }
+
+  const routeNodeIds: string[] = [entryNodeId]
+  const routeEdgeIds: string[] = []
+  let idx = entryIdx
+
+  function appendStep(): boolean {
+    const nextIdx = forward ? (idx + 1) % n : (idx - 1 + n) % n
+    const from = openNodeIds[idx]
+    const to = openNodeIds[nextIdx]
+    const edgeId = edgeByPair.get(`${from}|${to}`)
+    if (!edgeId) return false
+    routeEdgeIds.push(edgeId)
+    routeNodeIds.push(to)
+    idx = nextIdx
+    return true
+  }
+
+  for (let loop = 0; loop < fullLoopCount; loop += 1) {
+    for (let step = 0; step < n; step += 1) {
+      if (!appendStep()) return null
+    }
+  }
+
+  let guard = 0
+  while (idx !== exitIdx) {
+    if (!appendStep()) return null
+    guard += 1
+    if (guard > n) return null
+  }
+
+  const edgeLen = edgeLengthMap(graph)
+  const totalLengthPx = routeEdgeIds.reduce((sum, id) => sum + (edgeLen.get(id) ?? 0), 0)
+  return { routeNodeIds, routeEdgeIds, totalLengthPx }
 }
 
 function toCandidate(
@@ -521,14 +705,17 @@ function toCandidate(
   const popularityBonus = popularEdgeRatio * 18
 
   const distanceErrorRatio = Math.abs(actualDistanceM - targetDistanceM) / targetDistanceM
-  const perimeterMultiplier = targetDistanceM > 4000 ? 300 : 50
-  const internalMultiplier = targetDistanceM > 4000 ? 50 : 300
+  const qualityPenalty =
+    qualityLabel === 'recommended' ? 0 : qualityLabel === 'acceptable' ? 80 : qualityLabel === 'poor' ? 250 : 800
+  const perimeterMultiplier = targetDistanceM > 4000 ? 120 : 40
+  const internalMultiplier = targetDistanceM > 4000 ? 40 : 120
   const score =
-    distanceErrorRatio * 100 +
-    repeatedEdgeRatio * 15 -
+    distanceErrorRatio * 700 +
+    qualityPenalty +
+    repeatedEdgeRatio * 25 -
     perimeterPopularRatio * perimeterMultiplier -
     internalPopularRatio * internalMultiplier +
-    immediateBacktrackCount * 30
+    immediateBacktrackCount * 50
 
   const warnings = [...extraWarnings]
   if (usedLoop) warnings.push('包含重复路段，用于匹配目标距离。')
@@ -560,6 +747,588 @@ function toCandidate(
   }
 }
 
+function isAcceptableShortLoopCandidate(candidate: RouteCandidate): boolean {
+  return (
+    candidate.actualDistanceM >= candidate.targetDistanceM * MIN_SHORT_LOOP_UNDERRUN_RATIO &&
+    candidate.actualDistanceM <= candidate.targetDistanceM * MAX_SHORT_LOOP_OVERRUN_RATIO &&
+    candidate.repeatedEdgeRatio <= MAX_SHORT_LOOP_REPEATED_EDGE_RATIO &&
+    candidate.qualityLabel !== 'invalid' &&
+    countImmediateBacktracks(candidate.routeNodeIds) === 0
+  )
+}
+
+function generateShortLoopRoutes({
+  graph,
+  startNodeId,
+  targetDistanceM,
+  metersPerPixel,
+  maxCandidates,
+}: {
+  graph: RoadGraph
+  startNodeId: string
+  targetDistanceM: number
+  metersPerPixel: number
+  maxCandidates: number
+}): RouteCandidate[] {
+  const loopCandidates = generateLoopCandidates({
+    graph,
+    loopStartNodeId: startNodeId,
+    targetLoopDistanceM: targetDistanceM,
+    metersPerPixel,
+    maxCandidates: Math.max(maxCandidates * 3, 12),
+  })
+
+  const candidates = loopCandidates
+    .map((route, idx) =>
+      toCandidate(
+        graph,
+        route,
+        `SHORT_${String(idx + 1).padStart(3, '0')}`,
+        `短距离环线 ${idx + 1}`,
+        targetDistanceM,
+        0,
+        metersPerPixel,
+        'loop',
+        false,
+        0,
+      ),
+    )
+    .filter(isAcceptableShortLoopCandidate)
+    .sort(compareRouteCandidates)
+
+  return candidates.slice(0, maxCandidates)
+}
+
+function generateDistanceFillRoutes({
+  graph,
+  baseRoute,
+  baseRouteLengthM,
+  targetDistanceM,
+  metersPerPixel,
+  insertAtNodeIds,
+}: {
+  graph: RoadGraph
+  baseRoute: SegmentRoute
+  baseRouteLengthM: number
+  targetDistanceM: number
+  metersPerPixel: number
+  insertAtNodeIds: string[]
+}): SegmentRoute[] {
+  const shortfallM = targetDistanceM - baseRouteLengthM
+  if (shortfallM <= 100 || shortfallM > MAX_FILL_SHORTFALL_M) return []
+
+  const out: SegmentRoute[] = []
+  const seen = new Set<string>()
+  const targetLoopDistanceM = shortfallM <= 600 ? shortfallM : Math.min(shortfallM, 900)
+
+  for (const insertAtNodeId of insertAtNodeIds.filter((v, idx, arr) => arr.indexOf(v) === idx)) {
+    const loopCandidates = generateLoopCandidates({
+      graph,
+      loopStartNodeId: insertAtNodeId,
+      targetLoopDistanceM,
+      metersPerPixel,
+      maxCandidates: shortfallM <= 600 ? 3 : 4,
+    })
+    const extended = extendRouteWithRepeatedLoops({
+      graph,
+      baseRoute,
+      baseRouteLengthM,
+      loopCandidates,
+      targetDistanceM,
+      metersPerPixel,
+      maxRepeatCount: 1,
+      insertAtNodeId,
+    })
+
+    for (const route of extended) {
+      const totalLengthM = route.totalLengthPx * metersPerPixel
+      if (totalLengthM > targetDistanceM * MAX_FILL_OVERRUN_RATIO) continue
+
+      const diffPercentAbs = Math.abs((totalLengthM - targetDistanceM) / targetDistanceM) * 100
+      if (qualityFromDiff(diffPercentAbs) === 'invalid') continue
+      if (countImmediateBacktracks(route.routeNodeIds) > 0) continue
+
+      const fillEdgeIds = addedEdgeIds(baseRoute, route)
+      if (fillEdgeIds.length > 0 && uniqueRatio(fillEdgeIds) > MAX_FILL_REPEATED_EDGE_RATIO) continue
+
+      const key = route.routeEdgeIds.join('|')
+      if (seen.has(key)) continue
+      seen.add(key)
+      out.push(route)
+    }
+  }
+
+  return out
+}
+
+function generatePerimeterFirstLoopRoutes({
+  graph,
+  startNodeId,
+  targetDistanceM,
+  metersPerPixel,
+  maxCandidates,
+}: {
+  graph: RoadGraph
+  startNodeId: string
+  targetDistanceM: number
+  metersPerPixel: number
+  maxCandidates: number
+}): RouteCandidate[] {
+  const rawCycle = buildPerimeterCycle(graph)
+  if (!rawCycle || rawCycle.totalLengthPx <= 0) return []
+
+  const cycleLenM = rawCycle.totalLengthPx * metersPerPixel
+  if (cycleLenM <= 0) return []
+
+  let entryNodeId: string
+  let approachPath: DijkstraResult = { found: true, routeNodeIds: [startNodeId], routeEdgeIds: [], totalLengthPx: 0 }
+
+  if (rawCycle.routeNodeIds.includes(startNodeId)) {
+    entryNodeId = startNodeId
+  } else {
+    const path = findBestPerimeterEntry(graph, startNodeId, rawCycle.routeNodeIds.slice(0, -1))
+    if (!path) return []
+    entryNodeId = path.routeNodeIds[path.routeNodeIds.length - 1]
+    approachPath = path
+  }
+
+  const perimeterCycle = rotateCycleToStart(rawCycle, entryNodeId)
+  const approachTotalM = approachPath.totalLengthPx * metersPerPixel * 2
+  const availableForPerimeterM = targetDistanceM - approachTotalM
+  if (availableForPerimeterM <= 0) return []
+
+  const appNodes = approachPath.routeNodeIds
+  const appEdgeIds = approachPath.routeEdgeIds
+  const revAppNodes = [...appNodes].reverse()
+  const revAppEdgeIds = [...appEdgeIds].reverse()
+  const pNodes = perimeterCycle.routeNodeIds
+  const pEdgeIds = perimeterCycle.routeEdgeIds
+  const edgeLen = edgeLengthMap(graph)
+
+  function buildPerimeterRoute(loopCount: number): SegmentRoute {
+    const routeNodeIds: string[] = [...appNodes]
+    const routeEdgeIds: string[] = [...appEdgeIds]
+    for (let i = 0; i < loopCount; i += 1) {
+      routeNodeIds.push(...pNodes.slice(1))
+      routeEdgeIds.push(...pEdgeIds)
+    }
+    routeNodeIds.push(...revAppNodes.slice(1))
+    routeEdgeIds.push(...revAppEdgeIds)
+    const totalLengthPx = routeEdgeIds.reduce((sum, id) => sum + (edgeLen.get(id) ?? 0), 0)
+    return { routeNodeIds, routeEdgeIds, totalLengthPx }
+  }
+
+  const baseCycleCount = Math.max(1, Math.floor(availableForPerimeterM / cycleLenM))
+  const cycleCounts = [baseCycleCount, baseCycleCount + 1].filter((value, idx, arr) => arr.indexOf(value) === idx)
+  const candidates: RouteCandidate[] = []
+  const seen = new Set<string>()
+  let candidateIndex = 1
+
+  for (const cycleCount of cycleCounts) {
+    const route = buildPerimeterRoute(cycleCount)
+    const routeLengthM = route.totalLengthPx * metersPerPixel
+    if (routeLengthM > targetDistanceM * MAX_LOOP_PERIMETER_OVERRUN_RATIO) continue
+    const routeKey = route.routeEdgeIds.join('|')
+    if (seen.has(routeKey)) continue
+    seen.add(routeKey)
+    candidates.push(
+      toCandidate(
+        graph,
+        route,
+        `PERIM_${String(candidateIndex).padStart(3, '0')}`,
+        cycleCount === baseCycleCount ? 'Perimeter Loop' : 'Perimeter Extended Loop',
+        targetDistanceM,
+        routeLengthM,
+        metersPerPixel,
+        'loop',
+        cycleCount > 1,
+        cycleCount,
+      ),
+    )
+    candidateIndex += 1
+
+    const fillRoutes = generateDistanceFillRoutes({
+      graph,
+      baseRoute: route,
+      baseRouteLengthM: routeLengthM,
+      targetDistanceM,
+      metersPerPixel,
+      insertAtNodeIds: [entryNodeId, startNodeId],
+    })
+
+    for (const fillRoute of fillRoutes) {
+      const fillLengthM = fillRoute.totalLengthPx * metersPerPixel
+      if (fillLengthM > targetDistanceM * MAX_LOOP_PERIMETER_OVERRUN_RATIO) continue
+      const fillKey = fillRoute.routeEdgeIds.join('|')
+      if (seen.has(fillKey)) continue
+      seen.add(fillKey)
+      candidates.push(
+        toCandidate(
+          graph,
+          fillRoute,
+          `PERIM_${String(candidateIndex).padStart(3, '0')}`,
+          'Perimeter + Distance Fill',
+          targetDistanceM,
+          routeLengthM,
+          metersPerPixel,
+          'loop',
+          true,
+          cycleCount,
+        ),
+      )
+      candidateIndex += 1
+    }
+  }
+
+  const accessPaths = findPerimeterAccessPaths(graph, startNodeId, rawCycle.routeNodeIds.slice(0, -1), ENTRY_CANDIDATE_COUNT)
+  if (accessPaths.length === 0) accessPaths.push(approachPath)
+
+  for (const entryPath of accessPaths) {
+    const segmentEntryNodeId = entryPath.routeNodeIds[entryPath.routeNodeIds.length - 1]
+    for (const exitAccessPath of accessPaths) {
+      const segmentExitNodeId = exitAccessPath.routeNodeIds[exitAccessPath.routeNodeIds.length - 1]
+      const exitToStartPath = reversePath(exitAccessPath)
+
+      for (const forward of [true, false]) {
+        const baseTravel = buildCycleTravel(graph, rawCycle, segmentEntryNodeId, segmentExitNodeId, forward, 0)
+        if (!baseTravel) continue
+
+        const baseLengthM = (entryPath.totalLengthPx + baseTravel.totalLengthPx + exitToStartPath.totalLengthPx) * metersPerPixel
+        const remainingM = targetDistanceM - baseLengthM
+        const baseFullLoopCount = Math.max(0, Math.floor(remainingM / cycleLenM))
+        const segmentLoopCounts = [baseFullLoopCount, baseFullLoopCount + 1].filter((value, idx, arr) => arr.indexOf(value) === idx)
+
+        for (const fullLoopCount of segmentLoopCounts) {
+          const perimeterTravel = buildCycleTravel(graph, rawCycle, segmentEntryNodeId, segmentExitNodeId, forward, fullLoopCount)
+          if (!perimeterTravel) continue
+
+          const routeNodeIds = [
+            ...entryPath.routeNodeIds,
+            ...perimeterTravel.routeNodeIds.slice(1),
+            ...exitToStartPath.routeNodeIds.slice(1),
+          ]
+          const routeEdgeIds = [
+            ...entryPath.routeEdgeIds,
+            ...perimeterTravel.routeEdgeIds,
+            ...exitToStartPath.routeEdgeIds,
+          ]
+          const routeKey = routeEdgeIds.join('|')
+          if (seen.has(routeKey)) continue
+
+          const totalLengthPx = routeEdgeIds.reduce((sum, id) => sum + (edgeLen.get(id) ?? 0), 0)
+          const routeLengthM = totalLengthPx * metersPerPixel
+          if (routeLengthM > targetDistanceM * MAX_LOOP_PERIMETER_OVERRUN_RATIO) continue
+          if (perimeterEdgeRatio(graph, routeEdgeIds) < MIN_PERIMETER_ROUTE_RATIO) continue
+
+          seen.add(routeKey)
+          candidates.push(
+            toCandidate(
+              graph,
+              { routeNodeIds, routeEdgeIds, totalLengthPx },
+              `PERIM_SEG_${String(candidateIndex).padStart(3, '0')}`,
+              'Perimeter Segment Loop',
+              targetDistanceM,
+              routeLengthM,
+              metersPerPixel,
+              'loop',
+              fullLoopCount > 0,
+              fullLoopCount,
+            ),
+          )
+          candidateIndex += 1
+        }
+      }
+    }
+  }
+
+  const notShort = candidates.filter((candidate) => candidate.actualDistanceM >= candidate.targetDistanceM)
+  notShort.sort(compareRouteCandidates)
+  const validFirst = notShort.filter((candidate) => candidate.qualityLabel !== 'invalid')
+  const invalidRest = notShort.filter((candidate) => candidate.qualityLabel === 'invalid')
+  if (validFirst.length === 0 && invalidRest.length === 0) {
+    return candidates
+      .filter((candidate) => candidate.actualDistanceM >= candidate.targetDistanceM * MIN_SHORT_LOOP_UNDERRUN_RATIO)
+      .sort(compareRouteCandidates)
+      .slice(0, maxCandidates)
+      .map((candidate) => ({ ...candidate, warnings: [...candidate.warnings, 'under_target_fallback'] }))
+  }
+  return [...validFirst, ...invalidRest].slice(0, maxCandidates)
+}
+
+function generatePerimeterFirstPointToPointRoutes({
+  graph,
+  startNodeId,
+  endNodeId,
+  targetDistanceM,
+  metersPerPixel,
+  maxCandidates,
+}: {
+  graph: RoadGraph
+  startNodeId: string
+  endNodeId: string
+  targetDistanceM: number
+  metersPerPixel: number
+  maxCandidates: number
+}): RouteCandidate[] {
+  const rawCycle = buildPerimeterCycle(graph)
+  if (!rawCycle || rawCycle.totalLengthPx <= 0) return []
+
+  const cycleLenM = rawCycle.totalLengthPx * metersPerPixel
+  if (cycleLenM <= 0) return []
+
+  const perimeterNodeIds = rawCycle.routeNodeIds.slice(0, -1)
+  const startAccessPaths = findPerimeterAccessPaths(graph, startNodeId, perimeterNodeIds, ENTRY_CANDIDATE_COUNT)
+  const endAccessPaths = findPerimeterAccessPaths(graph, endNodeId, perimeterNodeIds, ENTRY_CANDIDATE_COUNT)
+  if (startAccessPaths.length === 0 || endAccessPaths.length === 0) return []
+
+  const candidates: RouteCandidate[] = []
+  const seen = new Set<string>()
+  let candidateIndex = 1
+
+  for (const startAccessPath of startAccessPaths) {
+    const entryNodeId = startAccessPath.routeNodeIds[startAccessPath.routeNodeIds.length - 1]
+    for (const endAccessPath of endAccessPaths) {
+      const exitNodeId = endAccessPath.routeNodeIds[endAccessPath.routeNodeIds.length - 1]
+      const exitToEndPath = reversePath(endAccessPath)
+
+      for (const forward of [true, false]) {
+        const baseTravel = buildCycleTravel(graph, rawCycle, entryNodeId, exitNodeId, forward, 0)
+        if (!baseTravel) continue
+
+        const baseLengthM = (startAccessPath.totalLengthPx + baseTravel.totalLengthPx + exitToEndPath.totalLengthPx) * metersPerPixel
+        const remainingM = targetDistanceM - baseLengthM
+        const baseLoopCount = Math.max(0, Math.floor(remainingM / cycleLenM))
+        const loopCounts = [baseLoopCount, baseLoopCount + 1].filter((value, idx, arr) => arr.indexOf(value) === idx)
+
+        for (const fullLoopCount of loopCounts) {
+          const perimeterTravel = buildCycleTravel(graph, rawCycle, entryNodeId, exitNodeId, forward, fullLoopCount)
+          if (!perimeterTravel) continue
+
+          const routeNodeIds = [
+            ...startAccessPath.routeNodeIds,
+            ...perimeterTravel.routeNodeIds.slice(1),
+            ...exitToEndPath.routeNodeIds.slice(1),
+          ]
+          const routeEdgeIds = [
+            ...startAccessPath.routeEdgeIds,
+            ...perimeterTravel.routeEdgeIds,
+            ...exitToEndPath.routeEdgeIds,
+          ]
+          const edgeLen = edgeLengthMap(graph)
+          const totalLengthPx = routeEdgeIds.reduce((sum, id) => sum + (edgeLen.get(id) ?? 0), 0)
+          const routeLengthM = totalLengthPx * metersPerPixel
+          if (routeLengthM > targetDistanceM * MAX_PERIMETER_OVERRUN_RATIO) continue
+          const routePerimeterRatio = perimeterEdgeRatio(graph, routeEdgeIds)
+          if (routePerimeterRatio < MIN_PERIMETER_ROUTE_RATIO) continue
+
+          const route: SegmentRoute = { routeNodeIds, routeEdgeIds, totalLengthPx }
+          const key = routeEdgeIds.join('|')
+          if (!seen.has(key)) {
+            seen.add(key)
+            candidates.push(
+              toCandidate(
+                graph,
+                route,
+                `PERIM_PT_${String(candidateIndex).padStart(3, '0')}`,
+                fullLoopCount > baseLoopCount ? 'Perimeter Extended Route' : 'Perimeter Through Route',
+                targetDistanceM,
+                routeLengthM,
+                metersPerPixel,
+                'detour',
+                fullLoopCount > 0,
+                fullLoopCount,
+              ),
+            )
+            candidateIndex += 1
+          }
+
+          const fillRoutes = generateDistanceFillRoutes({
+            graph,
+            baseRoute: route,
+            baseRouteLengthM: routeLengthM,
+            targetDistanceM,
+            metersPerPixel,
+            insertAtNodeIds: [entryNodeId, exitNodeId],
+          })
+          for (const fillRoute of fillRoutes) {
+            const fillLengthM = fillRoute.totalLengthPx * metersPerPixel
+            if (fillLengthM > targetDistanceM * MAX_PERIMETER_OVERRUN_RATIO) continue
+            const fillPerimeterRatio = perimeterEdgeRatio(graph, fillRoute.routeEdgeIds)
+            if (fillPerimeterRatio < MIN_PERIMETER_ROUTE_RATIO) continue
+            const fillKey = fillRoute.routeEdgeIds.join('|')
+            if (seen.has(fillKey)) continue
+            seen.add(fillKey)
+            candidates.push(
+              toCandidate(
+                graph,
+                fillRoute,
+                `PERIM_PT_${String(candidateIndex).padStart(3, '0')}`,
+                'Perimeter Through + Distance Fill',
+                targetDistanceM,
+                routeLengthM,
+                metersPerPixel,
+                'detour',
+                true,
+                fullLoopCount,
+              ),
+            )
+            candidateIndex += 1
+          }
+        }
+      }
+    }
+  }
+
+  const notShort = candidates.filter((candidate) => candidate.actualDistanceM >= candidate.targetDistanceM)
+  notShort.sort(compareRouteCandidates)
+  const validFirst = notShort.filter((candidate) => candidate.qualityLabel !== 'invalid')
+  const invalidRest = notShort.filter((candidate) => candidate.qualityLabel === 'invalid')
+  return [...validFirst, ...invalidRest].slice(0, maxCandidates)
+}
+
+function generatePerimeterFirstWaypointRoutes({
+  graph,
+  startNodeId,
+  waypointNodeId,
+  endNodeId,
+  targetDistanceM,
+  metersPerPixel,
+  maxCandidates,
+}: {
+  graph: RoadGraph
+  startNodeId: string
+  waypointNodeId: string
+  endNodeId: string
+  targetDistanceM: number
+  metersPerPixel: number
+  maxCandidates: number
+}): RouteCandidate[] {
+  const rawCycle = buildPerimeterCycle(graph)
+  if (!rawCycle || rawCycle.totalLengthPx <= 0) return []
+
+  const startToWaypointPath = dijkstra(graph, startNodeId, waypointNodeId)
+  if (!startToWaypointPath.found) return []
+
+  const cycleLenM = rawCycle.totalLengthPx * metersPerPixel
+  if (cycleLenM <= 0) return []
+
+  const perimeterNodeIds = rawCycle.routeNodeIds.slice(0, -1)
+  const waypointAccessPaths = findPerimeterAccessPaths(graph, waypointNodeId, perimeterNodeIds, ENTRY_CANDIDATE_COUNT)
+  const endAccessPaths = findPerimeterAccessPaths(graph, endNodeId, perimeterNodeIds, ENTRY_CANDIDATE_COUNT)
+  if (waypointAccessPaths.length === 0 || endAccessPaths.length === 0) return []
+
+  const candidates: RouteCandidate[] = []
+  const seen = new Set<string>()
+  let candidateIndex = 1
+
+  for (const waypointAccessPath of waypointAccessPaths) {
+    const entryNodeId = waypointAccessPath.routeNodeIds[waypointAccessPath.routeNodeIds.length - 1]
+    for (const endAccessPath of endAccessPaths) {
+      const exitNodeId = endAccessPath.routeNodeIds[endAccessPath.routeNodeIds.length - 1]
+      const exitToEndPath = reversePath(endAccessPath)
+
+      for (const forward of [true, false]) {
+        const baseTravel = buildCycleTravel(graph, rawCycle, entryNodeId, exitNodeId, forward, 0)
+        if (!baseTravel) continue
+
+        const baseLengthM = (
+          startToWaypointPath.totalLengthPx +
+          waypointAccessPath.totalLengthPx +
+          baseTravel.totalLengthPx +
+          exitToEndPath.totalLengthPx
+        ) * metersPerPixel
+        const remainingM = targetDistanceM - baseLengthM
+        const baseLoopCount = Math.max(0, Math.floor(remainingM / cycleLenM))
+        const loopCounts = [baseLoopCount, baseLoopCount + 1].filter((value, idx, arr) => arr.indexOf(value) === idx)
+
+        for (const fullLoopCount of loopCounts) {
+          const perimeterTravel = buildCycleTravel(graph, rawCycle, entryNodeId, exitNodeId, forward, fullLoopCount)
+          if (!perimeterTravel) continue
+
+          const routeNodeIds = [
+            ...startToWaypointPath.routeNodeIds,
+            ...waypointAccessPath.routeNodeIds.slice(1),
+            ...perimeterTravel.routeNodeIds.slice(1),
+            ...exitToEndPath.routeNodeIds.slice(1),
+          ]
+          const routeEdgeIds = [
+            ...startToWaypointPath.routeEdgeIds,
+            ...waypointAccessPath.routeEdgeIds,
+            ...perimeterTravel.routeEdgeIds,
+            ...exitToEndPath.routeEdgeIds,
+          ]
+          const edgeLen = edgeLengthMap(graph)
+          const totalLengthPx = routeEdgeIds.reduce((sum, id) => sum + (edgeLen.get(id) ?? 0), 0)
+          const routeLengthM = totalLengthPx * metersPerPixel
+          if (routeLengthM > targetDistanceM * MAX_PERIMETER_OVERRUN_RATIO) continue
+          const routePerimeterRatio = perimeterEdgeRatio(graph, routeEdgeIds)
+          if (routePerimeterRatio < MIN_PERIMETER_ROUTE_RATIO) continue
+
+          const route: SegmentRoute = { routeNodeIds, routeEdgeIds, totalLengthPx }
+          const key = routeEdgeIds.join('|')
+          if (!seen.has(key)) {
+            seen.add(key)
+            candidates.push(
+              toCandidate(
+                graph,
+                route,
+                `PERIM_WP_${String(candidateIndex).padStart(3, '0')}`,
+                fullLoopCount > baseLoopCount ? 'Perimeter Extended via Waypoint' : 'Perimeter via Waypoint',
+                targetDistanceM,
+                routeLengthM,
+                metersPerPixel,
+                'detour',
+                fullLoopCount > 0,
+                fullLoopCount,
+              ),
+            )
+            candidateIndex += 1
+          }
+
+          const fillRoutes = generateDistanceFillRoutes({
+            graph,
+            baseRoute: route,
+            baseRouteLengthM: routeLengthM,
+            targetDistanceM,
+            metersPerPixel,
+            insertAtNodeIds: [entryNodeId, exitNodeId],
+          })
+          for (const fillRoute of fillRoutes) {
+            const fillLengthM = fillRoute.totalLengthPx * metersPerPixel
+            if (fillLengthM > targetDistanceM * MAX_PERIMETER_OVERRUN_RATIO) continue
+            const fillPerimeterRatio = perimeterEdgeRatio(graph, fillRoute.routeEdgeIds)
+            if (fillPerimeterRatio < MIN_PERIMETER_ROUTE_RATIO) continue
+            const fillKey = fillRoute.routeEdgeIds.join('|')
+            if (seen.has(fillKey)) continue
+            seen.add(fillKey)
+            candidates.push(
+              toCandidate(
+                graph,
+                fillRoute,
+                `PERIM_WP_${String(candidateIndex).padStart(3, '0')}`,
+                'Perimeter via Waypoint + Distance Fill',
+                targetDistanceM,
+                routeLengthM,
+                metersPerPixel,
+                'detour',
+                true,
+                fullLoopCount,
+              ),
+            )
+            candidateIndex += 1
+          }
+        }
+      }
+    }
+  }
+
+  const notShort = candidates.filter((candidate) => candidate.actualDistanceM >= candidate.targetDistanceM)
+  notShort.sort(compareRouteCandidates)
+  const validFirst = notShort.filter((candidate) => candidate.qualityLabel !== 'invalid')
+  const invalidRest = notShort.filter((candidate) => candidate.qualityLabel === 'invalid')
+  return [...validFirst, ...invalidRest].slice(0, maxCandidates)
+}
+
 export function generateAlternativeRoutes({
   graph,
   startNodeId,
@@ -574,121 +1343,78 @@ export function generateAlternativeRoutes({
     return []
   }
 
+  if (!waypointNodeId && startNodeId === endNodeId && targetDistanceM > LONG_RUN_THRESHOLD_M) {
+    const perimeterRoutes = generatePerimeterFirstLoopRoutes({
+      graph,
+      startNodeId,
+      targetDistanceM,
+      metersPerPixel,
+      maxCandidates,
+    })
+    if (perimeterRoutes.length > 0) return perimeterRoutes
+  }
+
+  if (!waypointNodeId && startNodeId !== endNodeId && targetDistanceM > LONG_RUN_THRESHOLD_M) {
+    const perimeterRoutes = generatePerimeterFirstPointToPointRoutes({
+      graph,
+      startNodeId,
+      endNodeId,
+      targetDistanceM,
+      metersPerPixel,
+      maxCandidates,
+    })
+    if (perimeterRoutes.length > 0) return perimeterRoutes
+  }
+
+  if (waypointNodeId && targetDistanceM > LONG_RUN_THRESHOLD_M) {
+    const perimeterRoutes = generatePerimeterFirstWaypointRoutes({
+      graph,
+      startNodeId,
+      waypointNodeId,
+      endNodeId,
+      targetDistanceM,
+      metersPerPixel,
+      maxCandidates,
+    })
+    if (perimeterRoutes.length > 0) return perimeterRoutes
+  }
+
+  if (!waypointNodeId && startNodeId === endNodeId && targetDistanceM <= SHORT_LOOP_THRESHOLD_M) {
+    const shortLoopRoutes = generateShortLoopRoutes({
+      graph,
+      startNodeId,
+      targetDistanceM,
+      metersPerPixel,
+      maxCandidates,
+    })
+    if (shortLoopRoutes.length > 0) return shortLoopRoutes
+  }
+
   const candidates: RouteCandidate[] = []
   const baseRoutes: SegmentRoute[] = []
-  const nodePosMap = new Map(graph.nodes.map((n) => [n.node_id, { x: n.x, y: n.y }]))
 
   if (!waypointNodeId && startNodeId === endNodeId) {
-    let hasPerimeterCandidate = false
-
-    if (targetDistanceM > 4000) {
-      const rawCycle = buildPerimeterCycle(graph)
-      if (rawCycle && rawCycle.totalLengthPx > 0) {
-        const cycleLenM = rawCycle.totalLengthPx * metersPerPixel
-        if (cycleLenM > 0) {
-          // Determine entry node
-          let entryNodeId: string
-          let approachPath: DijkstraResult = { found: true, routeNodeIds: [], routeEdgeIds: [], totalLengthPx: 0 }
-
-          if (rawCycle.routeNodeIds.includes(startNodeId)) {
-            entryNodeId = startNodeId
-          } else {
-            const startPos = nodePosMap.get(startNodeId)
-            let nearest = rawCycle.routeNodeIds[0]
-            let minDist = Infinity
-            for (const nid of rawCycle.routeNodeIds) {
-              const p = nodePosMap.get(nid)
-              if (p && startPos) {
-                const d = Math.sqrt((p.x - startPos.x) ** 2 + (p.y - startPos.y) ** 2)
-                if (d < minDist) { minDist = d; nearest = nid }
-              }
-            }
-            entryNodeId = nearest
-            const path = dijkstra(graph, startNodeId, entryNodeId)
-            if (!path.found) hasPerimeterCandidate = false
-            else approachPath = path
-          }
-
-          if (approachPath.found) {
-            const perimeterCycle = rotateCycleToStart(rawCycle, entryNodeId)
-            const approachOutPx = approachPath.totalLengthPx
-            const approachTotalPx = approachOutPx * 2 // out and back
-
-            const remainingForPerimeterM = targetDistanceM - approachTotalPx * metersPerPixel
-            if (remainingForPerimeterM >= cycleLenM * 0.5) {
-              const cycleCount = Math.max(1, Math.round(remainingForPerimeterM / cycleLenM))
-
-              // Build combined nodes: start→entry (approach) + entry→...→entry (cycle×N) + entry→start (reverse)
-              const appNodes = approachPath.routeNodeIds // [start, ..., entry]
-              const appEdgeIds = approachPath.routeEdgeIds
-              const revAppNodes = [...appNodes].reverse() // [entry, ..., start]
-              const revAppEdgeIds = [...appEdgeIds].reverse()
-
-              const pNodes = perimeterCycle.routeNodeIds // [entry, ..., entry]
-              const pEdgeIds = perimeterCycle.routeEdgeIds
-
-              const combinedNodes: string[] = [
-                ...appNodes.slice(0, -1),
-              ]
-              const combinedEdges: string[] = [...appEdgeIds]
-              for (let i = 0; i < cycleCount; i++) {
-                if (i === 0) {
-                  combinedNodes.push(...pNodes)
-                } else {
-                  combinedNodes.push(...pNodes.slice(1))
-                }
-                combinedEdges.push(...pEdgeIds)
-              }
-              combinedNodes.push(...revAppNodes.slice(1))
-              combinedEdges.push(...revAppEdgeIds)
-
-              const pEdgeLen = edgeLengthMap(graph)
-              const combinedPx = combinedEdges.reduce((s, id) => s + (pEdgeLen.get(id) ?? 0), 0)
-              const combinedM = combinedPx * metersPerPixel
-
-              if (combinedM >= targetDistanceM * 0.5) {
-                const combinedRoute: SegmentRoute = { routeNodeIds: combinedNodes, routeEdgeIds: combinedEdges, totalLengthPx: combinedPx }
-                candidates.push(
-                  toCandidate(graph, combinedRoute, 'PERIM_001', 'Perimeter Loop', targetDistanceM, 0, metersPerPixel, 'loop', false, cycleCount),
-                )
-                hasPerimeterCandidate = true
-
-                // Extend with internal loops at startNodeId if still under target
-                const shortfallM = targetDistanceM - combinedM
-                if (shortfallM > 100) {
-                  const loopCandidates = generateLoopCandidates({
-                    graph, loopStartNodeId: startNodeId, targetLoopDistanceM: shortfallM, metersPerPixel, maxCandidates: 3,
-                  })
-                  const extended = extendRouteWithRepeatedLoops({
-                    graph, baseRoute: combinedRoute, baseRouteLengthM: combinedM,
-                    loopCandidates, targetDistanceM, metersPerPixel,
-                    maxRepeatCount: Math.max(2, Math.ceil(shortfallM / 200) + 1), insertAtNodeId: startNodeId,
-                  })
-                  for (const ex of extended) {
-                    candidates.push(toCandidate(graph, ex, 'PERIM_002', 'Perimeter + Internal Fill', targetDistanceM, combinedM, metersPerPixel, 'loop', true, cycleCount))
-                  }
-                }
-              }
-            }
-          }
-        }
+    const loopCandidates = generateLoopCandidates({
+      graph, loopStartNodeId: startNodeId, targetLoopDistanceM: targetDistanceM, metersPerPixel, maxCandidates: 5,
+    })
+    const emptyBase: SegmentRoute = { routeNodeIds: [startNodeId], routeEdgeIds: [], totalLengthPx: 0 }
+    const extended = extendRouteWithRepeatedLoops({
+      graph, baseRoute: emptyBase, baseRouteLengthM: 0, loopCandidates, targetDistanceM, metersPerPixel,
+      maxRepeatCount: 1, insertAtNodeId: startNodeId,
+    })
+    let idx = 1
+    for (const ex of extended) {
+      const candidate = toCandidate(graph, ex, `CAND_${String(idx).padStart(3, '0')}`, `环线 ${idx}`, targetDistanceM, 0, metersPerPixel, 'loop', true, 1)
+      const acceptableLongFallback =
+        targetDistanceM > SHORT_LOOP_THRESHOLD_M &&
+        candidate.actualDistanceM <= candidate.targetDistanceM * MAX_LOOP_PERIMETER_OVERRUN_RATIO &&
+        candidate.repeatedEdgeRatio <= MAX_FILL_REPEATED_EDGE_RATIO &&
+        candidate.qualityLabel !== 'invalid' &&
+        countImmediateBacktracks(candidate.routeNodeIds) === 0
+      if (isAcceptableShortLoopCandidate(candidate) || acceptableLongFallback) {
+        candidates.push(candidate)
       }
-    }
-
-    if (!hasPerimeterCandidate) {
-      const loopCandidates = generateLoopCandidates({
-        graph, loopStartNodeId: startNodeId, targetLoopDistanceM: targetDistanceM, metersPerPixel, maxCandidates: 5,
-      })
-      const emptyBase: SegmentRoute = { routeNodeIds: [startNodeId], routeEdgeIds: [], totalLengthPx: 0 }
-      const extended = extendRouteWithRepeatedLoops({
-        graph, baseRoute: emptyBase, baseRouteLengthM: 0, loopCandidates, targetDistanceM, metersPerPixel,
-        maxRepeatCount: Math.max(4, Math.ceil(targetDistanceM / 300) + 2), insertAtNodeId: startNodeId,
-      })
-      let idx = 1
-      for (const ex of extended) {
-        candidates.push(toCandidate(graph, ex, `CAND_${String(idx).padStart(3, '0')}`, `环线 ${idx}`, targetDistanceM, 0, metersPerPixel, 'loop', true, 1))
-        idx += 1
-      }
+      idx += 1
     }
   } else if (!waypointNodeId) {
     baseRoutes.push(...generateSegmentAlternatives(graph, startNodeId, endNodeId, 3, penaltyFactor))
@@ -804,7 +1530,7 @@ export function generateAlternativeRoutes({
     }
   }
 
-  candidates.sort((a, b) => a.score - b.score)
+  candidates.sort(compareRouteCandidates)
 
   const noImmediateBacktrack = candidates.filter(
     (c) => countImmediateBacktracks(c.routeNodeIds) === 0,
@@ -819,7 +1545,7 @@ export function generateAlternativeRoutes({
   // fallback: if no >=target candidate, allow best under-target with warning
   if (validFirst.length === 0 && invalidRest.length === 0) {
     const fallback = [...pool]
-      .sort((a, b) => a.score - b.score)
+      .sort(compareRouteCandidates)
       .slice(0, maxCandidates)
       .map((c) => ({ ...c, warnings: [...c.warnings, 'under_target_fallback'] }))
     return fallback

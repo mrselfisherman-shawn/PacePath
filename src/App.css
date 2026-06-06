@@ -758,6 +758,16 @@
   line-height: 1.45;
 }
 
+.candidate-item-primary {
+  color: #111111;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1.45;
+}
+
 .candidate-item-row {
   display: flex;
   justify-content: space-between;

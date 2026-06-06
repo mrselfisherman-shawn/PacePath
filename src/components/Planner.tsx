@@ -1503,6 +1503,12 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
                   maxMin = targetKm * paceMinPerKm + overflowKm * WALKING_PACE_MIN_PER_KM
                 }
                 const timeText = `~${formatMinutesToClock(minMin)}` + (maxMin > minMin ? `–${formatMinutesToClock(maxMin)}` : '') + ' min'
+                const metaItems = [
+                  candidate.popularEdgeRatio > 0 ? `Popular ${(candidate.popularEdgeRatio * 100).toFixed(0)}%` : '',
+                  candidate.preferredEdgeRatio > 0 ? `Preferred ${(candidate.preferredEdgeRatio * 100).toFixed(0)}%` : '',
+                  candidate.scenicAverage > 0 ? `Scenic ${(candidate.scenicAverage * 100).toFixed(0)}%` : '',
+                  candidate.warnings.includes('under_target_fallback') ? 'under target fallback' : '',
+                ].filter(Boolean)
 
                 return (
                   <button
@@ -1513,23 +1519,13 @@ export function Planner({ variant = 'running' }: { variant?: 'running' | 'shorte
                   >
                     <span className="candidate-item-title">Option {index + 1}</span>
                     <div className="candidate-item-row">
-                      <span className="candidate-item-meta">
-                        {(candidate.totalLengthM / 1000).toFixed(2)} km | {timeText}
-                        {candidate.popularEdgeRatio > 0
-                          ? ` | Popular ${(candidate.popularEdgeRatio * 100).toFixed(0)}%`
-                          : ''}
-                        {candidate.preferredEdgeRatio > 0
-                          ? ` | Preferred ${(candidate.preferredEdgeRatio * 100).toFixed(0)}%`
-                          : ''}
-                        {candidate.scenicAverage > 0
-                          ? ` | Scenic ${(candidate.scenicAverage * 100).toFixed(0)}%`
-                          : ''}
-                        {candidate.warnings.includes('under_target_fallback')
-                          ? ' | under target fallback'
-                          : ''}
-                      </span>
+                      <div className="candidate-item-primary">
+                        <span>Distance: {(candidate.totalLengthM / 1000).toFixed(2)} km</span>
+                        <span>Estimated Time: {timeText}</span>
+                      </div>
                       <span className="candidate-item-stars">{getStars(candidate.score)}</span>
                     </div>
+                    {metaItems.length > 0 ? <span className="candidate-item-meta">{metaItems.join(' | ')}</span> : null}
                   </button>
                 )
               })
